@@ -1,0 +1,23 @@
+version: "3.2"
+
+services:
+  dev:
+    container_name: Bool
+    image: paritytech/ci-linux:production
+    working_dir: /var/www/Bool
+    ports:
+      - "9944:9944"
+    environment:
+      - CARGO_HOME=/var/www/Bool/.cargo
+    volumes:
+      - .:/var/www/Bool
+      - type: bind
+        source: ./.local
+        target: /root/.local
+    command: bash -c "cargo build --release && ./target/release/Bool --dev --ws-external"
+
+
+
+substrate_cli for Cli {
+
+}

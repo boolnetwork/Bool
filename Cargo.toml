@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "primitives",
+    "rpc",
+    "runtime",
+    "cli",
+]
+
+[profile.release]
+panic = 'unwind'
