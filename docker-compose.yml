@@ -15,9 +15,3 @@ services:
         source: ./.local
         target: /root/.local
     command: bash -c "cargo build --release && ./target/release/Bool --dev --ws-external"
-
-
-
-substrate_cli for Cli {
-
-}
