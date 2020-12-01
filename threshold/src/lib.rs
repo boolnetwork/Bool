@@ -95,10 +95,19 @@ impl<Block: BlockT, N: NetworkT<Block> + Sync> Future for TssWork<Block, N>
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Future::poll(Pin::new(&mut self.worker), cx) {
             Poll::Pending => {}
-            Poll::Ready(_) => {
-                return Poll::Ready(
-                    Err(Error::Safety("Worker has concluded.".into()))
-                )
+            Poll::Ready(e) => {
+                match e {
+                    Err(Error::Safety(error_string)) => {
+                        return Poll::Ready(
+                            Err(Error::Safety(format!("Worker has concluded for: {}.", error_string)))
+                        )
+                    },
+                    _ => {
+                        return Poll::Ready(
+                            Err(Error::Safety("Unknown reason cause threshold shut down".into()))
+                        )
+                    },
+                }
             }
         }
 
@@ -182,20 +191,20 @@ impl<Block: BlockT> Future for Worker<Block> {
     type Output = Result<(), Error>;
     // TODO: how to open a task and close task
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match Stream::poll_next(Pin::new(&mut self.command_rx), cx) {
-            Poll::Pending => {},
-            Poll::Ready(None) => {
-                // the `commands_rx` stream should never conclude since it's never closed.
-                return Poll::Ready(
-                    Err(Error::Safety("`commands_rx` was closed.".into()))
-                )
-            },
-            Poll::Ready(Some(command)) => {
-                // some command issued externally
-                self.handle_worker_command(command);
-                cx.waker().wake_by_ref();
-            }
-        }
+        // match Stream::poll_next(Pin::new(&mut self.command_rx), cx) {
+        //     Poll::Pending => {},
+        //     Poll::Ready(None) => {
+        //         // the `commands_rx` stream should never conclude since it's never closed.
+        //         return Poll::Ready(
+        //             Err(Error::Safety("`commands_rx` was closed.".into()))
+        //         )
+        //     },
+        //     Poll::Ready(Some(command)) => {
+        //         // some command issued externally
+        //         self.handle_worker_command(command);
+        //         cx.waker().wake_by_ref();
+        //     }
+        // }
 
         // get messages from task, handle it(send to net or chain)
         match Stream::poll_next(Pin::new(&mut self.low_receiver), cx) {
@@ -205,7 +214,7 @@ impl<Block: BlockT> Future for Worker<Block> {
             },
             Poll::Ready(None) => {
                 return Poll::Ready(
-                    Err(Error::Network("low receiver closed".into())))
+                    Err(Error::Safety("low receiver closed".into())))
             },
             Poll::Pending => {},
         }
