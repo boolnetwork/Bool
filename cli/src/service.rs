@@ -15,6 +15,7 @@ use sp_runtime::traits::Block as BlockT;
 use futures::prelude::*;
 use sc_client_api::{ExecutorProvider, RemoteBackend};
 use sp_core::traits::BareCryptoStorePtr;
+use threshold::{self, run_threshold};
 use crate::executor::Executor;
 
 type FullClient = sc_service::TFullClient<Block, RuntimeApi, Executor>;
@@ -221,7 +222,7 @@ pub fn new_full_base(
 		let babe_config = sc_consensus_babe::BabeParams {
 			keystore: keystore.clone(),
 			client: client.clone(),
-			select_chain,
+			select_chain: select_chain.clone(),
 			env: proposer,
 			block_import,
 			sync_oracle: network.clone(),
@@ -280,7 +281,7 @@ pub fn new_full_base(
 		// FIXME #1578 make this available through chainspec
 		gossip_duration: std::time::Duration::from_millis(333),
 		justification_period: 512,
-		name: Some(name),
+		name: Some(name.clone()),
 		observer_enabled: false,
 		keystore,
 		is_authority: role.is_network_authority(),
@@ -317,6 +318,22 @@ pub fn new_full_base(
 			network.clone(),
 		)?;
 	}
+
+	let (_tss_command_tx, tss_link) = threshold::block_import(client.clone(), select_chain.clone()).unwrap();
+	let config = threshold::Config {
+		gossip_duration: std::time::Duration::from_millis(25),
+		name: Some(name)
+	};
+	let tss_params = threshold::TssParams {
+		config,
+		link: tss_link,
+		network: network.clone(),
+		telemetry_on_connect: Some(telemetry_connection_sinks.on_connect_stream()),
+	};
+	task_manager.spawn_essential_handle().spawn_blocking(
+		"tss-p2p",
+		run_threshold(tss_params)?
+	);
 
 	network_starter.start_network();
 	Ok(NewFullBase {
