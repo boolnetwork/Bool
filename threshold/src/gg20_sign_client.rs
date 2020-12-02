@@ -487,6 +487,14 @@ pub async fn gg20_sign_client(
     info!(target: "afg", "sign time is: {:?}", difference);
     info!(target: "afg", "----------------------------------------------------------------");
 
+    // TODO: this for test, in the future, the database will be kept
+    if let Ok(mut db) = peer_ids.write() {
+        db.clear();
+    }
+    if let Ok(mut db) = db_mtx.write() {
+        db.clear();
+    }
+
     // TODO: should send the result to the chain
     Ok(TssResult::SignResult())
 }

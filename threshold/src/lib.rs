@@ -165,7 +165,6 @@ impl<B: BlockT> Worker<B> {
                     ));
                 // TODO: return the result to chain
                 let _res = future::timeout(time, mission).map_err(|e|{});
-                self.clear_keygen();
             },
             WorkerCommand::Sign => {
                 use async_std::future;
@@ -177,7 +176,6 @@ impl<B: BlockT> Worker<B> {
                 ));
                 // TODO: return the result to chain
                 let _res = future::timeout(time, mission).map_err(|e|{});
-                self.clear_sign();
             },
         }
     }
