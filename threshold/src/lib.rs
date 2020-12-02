@@ -2,7 +2,7 @@
 use futures::{
     prelude::*,
 };
-use log::{error};
+use log::{error, info};
 use sc_client_api::{
     backend::{AuxStore, Backend},
     LockImportRun, BlockchainEvents, Finalizer, TransactionFor, ExecutorProvider,
@@ -12,16 +12,15 @@ use sp_api::ProvideRuntimeApi;
 use sp_blockchain::{HeaderBackend, Error as ClientError, HeaderMetadata};
 use sp_runtime::traits::Block as BlockT;
 use sp_consensus::{SelectChain, BlockImport};
-// use sc_network::PeerId;
+use sc_network::PeerId;
 use sc_network_gossip::GossipEngine;
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 // use sc_telemetry::{telemetry, CONSENSUS_INFO, CONSENSUS_DEBUG};
 use parking_lot::{Mutex};
 use async_std;
-
 use std::collections::{HashSet, HashMap};
 use std::sync::{RwLock, Arc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
@@ -123,7 +122,10 @@ pub struct Worker<B: BlockT> {
     low_sender: Arc<Mutex<TracingUnboundedSender<String>>>,
     low_receiver: TracingUnboundedReceiver<String>,
     gossip_engine: Arc<Mutex<GossipEngine<B>>>,
-    command_rx: TracingUnboundedReceiver<WorkerCommand>
+    command_rx: TracingUnboundedReceiver<WorkerCommand>,
+    messages: HashSet<Vec<u8>>,
+    counter: u16,
+    start_time: SystemTime,
 }
 
 impl<B: BlockT> Worker<B> {
@@ -142,7 +144,10 @@ impl<B: BlockT> Worker<B> {
             low_sender,
             low_receiver,
             gossip_engine,
-            command_rx
+            command_rx,
+            messages: HashSet::new(),
+            counter: 0,
+            start_time: SystemTime::now()
         }
     }
 
@@ -205,7 +210,12 @@ impl<Block: BlockT> Future for Worker<Block> {
         //         cx.waker().wake_by_ref();
         //     }
         // }
-
+        let time = Duration::from_secs(5);
+        if self.start_time.elapsed().unwrap() >= time && self.counter == 0 {
+            let command = WorkerCommand::Keygen;
+            self.counter += 1;
+            self.handle_worker_command(command);
+        }
         // get messages from task, handle it(send to net or chain)
         match Stream::poll_next(Pin::new(&mut self.low_receiver), cx) {
             Poll::Ready(Some(data)) => {
@@ -225,50 +235,52 @@ impl<Block: BlockT> Future for Worker<Block> {
         loop {
             match Stream::poll_next(Pin::new(&mut messages), cx) {
                 Poll::Ready(Some(notification)) => {
-                    let data = String::from_utf8_lossy(&notification.message);
-                    let data: GossipMessage = serde_json::from_str(&data).unwrap();
-                    match data {
-                        GossipMessage::Keygen(data) => {
-                            // let entry = String::from_utf8_lossy(&data.to_vec());
-                            let entry: Entry = serde_json::from_str(&data).unwrap();
-                            loop {
-                                if let Ok(mut db) = self.keygen_db_mtx.try_write() {
-                                    db.insert(entry.key.clone(), entry.value.clone());
-                                    break;
+                    if !self.messages.contains(&notification.message.clone()) {
+                        self.messages.insert(notification.message.clone());
+                        let data = String::from_utf8_lossy(&notification.message);
+                        let data: GossipMessage = serde_json::from_str(&data).unwrap();
+                        match data {
+                            GossipMessage::Keygen(data) => {
+                                let entry: Entry = serde_json::from_str(&data).unwrap();
+                                loop {
+                                    if let Ok(mut db) = self.keygen_db_mtx.try_write() {
+                                        db.insert(entry.key.clone(), entry.value.clone());
+                                        break;
+                                    }
                                 }
-                            }
-                        },
-                        GossipMessage::Sign(data) => {
-                            // let entry = String::from_utf8_lossy(&data.to_vec());
-                            let entry: Entry = serde_json::from_str(&data).unwrap();
-                            loop {
-                                if let Ok(mut db) = self.sign_db_mtx.try_write() {
-                                    db.insert(entry.key.clone(), entry.value.clone());
-                                    break;
+                            },
+                            GossipMessage::Sign(data) => {
+                                let entry: Entry = serde_json::from_str(&data).unwrap();
+                                loop {
+                                    if let Ok(mut db) = self.sign_db_mtx.try_write() {
+                                        db.insert(entry.key.clone(), entry.value.clone());
+                                        break;
+                                    }
                                 }
-                            }
-                        },
-                        GossipMessage::KeygenNotify(data) => {
-                            // let entry = String::from_utf8_lossy(&data.to_vec());
-                            let entry: Entry = serde_json::from_str(&data).unwrap();
-                            loop {
-                                if let Ok(mut db) = self.keygen_ids.try_write() {
-                                    db.insert(entry.value.clone().as_bytes().to_vec());
-                                    break;
+                            },
+                            GossipMessage::KeygenNotify(data) => {
+                                let entry: Entry = serde_json::from_str(&data).unwrap();
+                                let data: Vec<u8> = serde_json::from_str(&entry.value).unwrap();
+                                loop {
+                                    if let Ok(mut db) = self.keygen_ids.try_write() {
+                                        db.insert(data.clone());
+                                        break;
+                                    }
                                 }
-                            }
-                        },
-                        GossipMessage::SignNotify(data) => {
-                            // let entry = String::from_utf8_lossy(&data.to_vec());
-                            let entry: Entry = serde_json::from_str(&data).unwrap();
-                            loop {
-                                if let Ok(mut db) = self.sign_ids.try_write() {
-                                    db.insert(entry.value.clone().as_bytes().to_vec());
-                                    break;
+                            },
+                            GossipMessage::SignNotify(data) => {
+                                let entry: Entry = serde_json::from_str(&data).unwrap();
+                                let data: Vec<u8> = serde_json::from_str(&entry.value).unwrap();
+                                loop {
+                                    if let Ok(mut db) = self.sign_ids.try_write() {
+                                        db.insert(data.clone());
+                                        break;
+                                    }
                                 }
-                            }
-                        },
+                            },
+                        }
                     }
+
                 },
                 Poll::Ready(None) => {},
                 Poll::Pending => break,

@@ -108,10 +108,10 @@ pub fn broadcast_ch(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::KeygenNotify => GossipMessage::KeygenNotify(serde_json::to_string(&data).unwrap()),
-        PartyType::SignNotify => GossipMessage::SignNotify(serde_json::to_string(&data).unwrap()),
-        PartyType::Keygen => GossipMessage::Keygen(serde_json::to_string(&data).unwrap()),
-        PartyType::Sign => GossipMessage::Sign(serde_json::to_string(&data).unwrap()),
+        PartyType::KeygenNotify => GossipMessage::KeygenNotify(data),
+        PartyType::SignNotify => GossipMessage::SignNotify(data),
+        PartyType::Keygen => GossipMessage::Keygen(data),
+        PartyType::Sign => GossipMessage::Sign(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());
@@ -133,10 +133,10 @@ pub fn sendp2p_ch(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::KeygenNotify => GossipMessage::KeygenNotify(serde_json::to_string(&data).unwrap()),
-        PartyType::SignNotify => GossipMessage::SignNotify(serde_json::to_string(&data).unwrap()),
-        PartyType::Keygen => GossipMessage::Keygen(serde_json::to_string(&data).unwrap()),
-        PartyType::Sign => GossipMessage::Sign(serde_json::to_string(&data).unwrap()),
+        PartyType::KeygenNotify => GossipMessage::KeygenNotify(data),
+        PartyType::SignNotify => GossipMessage::SignNotify(data),
+        PartyType::Keygen => GossipMessage::Keygen(data),
+        PartyType::Sign => GossipMessage::Sign(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());

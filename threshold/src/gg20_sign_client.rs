@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-
+use log::{error, info};
 use curv::arithmetic::traits::Converter;
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
 use curv::cryptographic_primitives::hashing::traits::Hash;
@@ -482,7 +482,10 @@ pub async fn gg20_sign_client(
     fs::write("signature".to_string(), sign_json).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    println!("total time: {:?}", difference);
+    // println!("total time: {:?}", difference);
+    info!(target: "afg", "----------------------------------------------------------------");
+    info!(target: "afg", "sign time is: {:?}", difference);
+    info!(target: "afg", "----------------------------------------------------------------");
 
     // TODO: should send the result to the chain
     Ok(TssResult::SignResult())

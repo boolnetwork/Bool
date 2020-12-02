@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-
+use log::{error, info};
 use curv::arithmetic::traits::Converter;
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
@@ -42,10 +42,13 @@ pub async fn gg20_keygen_client (
     peer_ids: Arc<RwLock<HashSet<Vec<u8>>>>
 ) -> Result<TssResult, ErrorType> {
     let totaltime = SystemTime::now();
-
     let params: Parameters = serde_json::from_str::<Params>(
         &std::fs::read_to_string("params.json").expect("Could not read input params file"),
     ).unwrap().into();
+    // let params: Parameters = Parameters {
+    //     share_count: 2,
+    //     threshold: 1
+    // };
     let params_lis = params.clone();
 
     let mut party_num_int: u16 = 0;
@@ -61,7 +64,6 @@ pub async fn gg20_keygen_client (
         }
     }
 
-
     // tell other node the local_peer_id
     broadcast_ch(
         tx.clone(),
@@ -70,7 +72,6 @@ pub async fn gg20_keygen_client (
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
         PartyType::KeygenNotify
     );
-
     // get party_num_int
     loop{
         if let Ok(peer_ids) = peer_ids.try_read() {
@@ -94,7 +95,6 @@ pub async fn gg20_keygen_client (
         serde_json::to_string(&res_stage1.bc_com1_l).unwrap(),
         PartyType::Keygen
     );
-
     let round1_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
         party_num_int,
@@ -108,7 +108,6 @@ pub async fn gg20_keygen_client (
         .collect::<Vec<_>>();
 
     bc1_vec.insert(party_num_int as usize - 1, res_stage1.bc_com1_l);
-
     broadcast_ch(
         tx.clone(),
         party_num_int,
@@ -136,7 +135,6 @@ pub async fn gg20_keygen_client (
         bc1_vec_s: bc1_vec.clone(),
     };
     let res_stage2 = keygen_stage2(&input_stage2).expect("keygen stage 2 failed.");
-
     let mut point_vec: Vec<GE> = Vec::new();
     let mut enc_keys: Vec<Vec<u8>> = Vec::new();
     for i in 1..=params.share_count {
@@ -202,7 +200,6 @@ pub async fn gg20_keygen_client (
             j += 1;
         }
     }
-
     broadcast_ch(
         tx.clone(),
         party_num_int,
@@ -231,6 +228,7 @@ pub async fn gg20_keygen_client (
             j += 1;
         }
     }
+
     let input_stage3 = KeyGenStage3Input {
         party_keys_s: res_stage1.party_keys_l.clone(),
         vss_scheme_vec_s: vss_scheme_vec.clone(),
@@ -256,7 +254,6 @@ pub async fn gg20_keygen_client (
         delay,
         "round5"
     );
-
     let mut j = 0;
     let mut dlog_proof_vec: Vec<DLogProof> = Vec::new();
     for i in 1..=params.share_count {
@@ -300,7 +297,10 @@ pub async fn gg20_keygen_client (
 
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    println!("total time: {:?}", difference);
+    // println!("total time: {:?}", difference);
+    info!(target: "afg", "----------------------------------------------------------------");
+    info!(target: "afg", "keygen time is: {:?}", difference);
+    info!(target: "afg", "----------------------------------------------------------------");
 
     // TODO: should result the result to the chain
     Ok(TssResult::KeygenResult())
