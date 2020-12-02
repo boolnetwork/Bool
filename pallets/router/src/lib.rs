@@ -10,9 +10,15 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+/// rule structure.
 pub struct RoutingRule(Vec<u8>);
 
 
+pub struct
+
+///
+///
+///
 pub trait Trait: frame_system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 }
@@ -56,6 +62,10 @@ decl_module! {
 
 impl<T: Trait> Module<T> {
 	pub fn do_route(message: Vec<u8>) -> bool {
+		// parse message, get 'from_chain', 'source_hash', 'to_chain'
+		// use vrf rand to select partners
+
+		//
 		return true;
 	}
 }
