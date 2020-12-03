@@ -37,6 +37,14 @@ pub enum GossipMessage {
 }
 
 #[derive(Clone, PartialEq, Debug)]
+pub struct MissionParam {
+    index: u64,
+    store: Vec<u8>,
+    n: u16,
+    t: u16
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum PartyType {
     Keygen,
     Sign,
@@ -98,10 +106,11 @@ pub fn broadcast_ch(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     party_num_int: u16,
     round: &str,
+    index: u64,
     data: String,
     ty: PartyType
 ) {
-    let key = format!("{}-{}", party_num_int, round);
+    let key = format!("{}-{}-{}", party_num_int, round, index);
     let entry: Entry = Entry{
         key,
         value: data,
@@ -123,10 +132,11 @@ pub fn sendp2p_ch(
     party_from: u16,
     party_to: u16,
     round: &str,
+    index: u64,
     data: String,
     ty: PartyType
 ) {
-    let key = format!("{}-{}-{}", party_from, party_to, round);
+    let key = format!("{}-{}-{}-{}", party_from, party_to, round, index);
     let entry: Entry = Entry{
         key,
         value: data,
@@ -147,12 +157,13 @@ pub fn poll_for_broadcasts_ch(
     party_num: u16,
     n: u16,
     delay: Duration,
-    round: &str
+    round: &str,
+    index: u64,
 ) -> Vec<String> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
-            let key = format!("{}-{}", i, round);
+            let key = format!("{}-{}-{}", i, round, index);
             loop {
                 {
                     let db = db_mtx.read().unwrap();
@@ -175,12 +186,13 @@ pub fn poll_for_p2p_ch(
     party_num: u16,
     n: u16,
     delay: Duration,
-    round: &str
+    round: &str,
+    index: u64,
 ) -> Vec<String> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
-            let key = format!("{}-{}-{}", i, party_num, round);
+            let key = format!("{}-{}-{}-{}", i, party_num, round, index);
             loop {
                 {
                     let db = db_mtx.read().unwrap();
@@ -229,9 +241,9 @@ pub fn check_sig(r: &FE, s: &FE, msg: &BigInt, pk: &GE) {
     assert!(is_correct);
 }
 #[allow(dead_code)]
-pub fn get_party_num(map: &HashSet<Vec<u8>>, id: &Vec<u8>) -> u16 {
+pub fn get_party_num(index: u64, map: &HashMap<u64, Vec<Vec<u8>>>, id: &Vec<u8>) -> u16 {
     let mut res: u16 = 1;
-    for vv in (*map).clone() {
+    for vv in *(map.get(*index).unwrap()).clone() {
         if compare_id(id, &vv) {
             res += 1;
         }

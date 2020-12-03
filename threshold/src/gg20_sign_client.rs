@@ -28,7 +28,7 @@ use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, PartyType,
              poll_for_broadcasts_ch, poll_for_p2p_ch, broadcast_ch, sendp2p_ch, get_party_num,
-             TssResult };
+             TssResult, MissionParam };
 use crate::common::AES_KEY_BYTES_LEN;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,9 +60,16 @@ pub struct PartyKeyPair {
 pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    peer_ids: Arc<RwLock<HashSet<Vec<u8>>>>
+    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    mission_params: MissionParam,
 ) -> Result<TssResult, ErrorType> {
     let totaltime = SystemTime::now();
+    let MissionParam {
+        index,
+        store,
+        n,
+        t
+    } = mission_params;
     let message_str = "KZen Network".to_string();
     let message = match hex::decode(message_str.clone()) {
         Ok(x) => x,
@@ -77,9 +84,10 @@ pub async fn gg20_sign_client(
     let keypair: PartyKeyPair = serde_json::from_str(&data).unwrap();
 
     //read parameters:
-    let data = fs::read_to_string("params.json")
-        .expect("Unable to read params, make sure config file is present in the same folder ");
-    let params: Params = serde_json::from_str(&data).unwrap();
+    let params: Params = Params {
+        parties: t,
+        threshold: n,
+    };
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
     let mut party_num_int: u16 = 0;
@@ -88,7 +96,7 @@ pub async fn gg20_sign_client(
     let local_peer_id: PeerId = PeerId::from(local_key.public());
     loop{
         if let Ok(mut peer_ids) = peer_ids.try_write() {
-            (*peer_ids).insert(local_peer_id.clone().as_bytes().to_vec());
+            (*peer_ids).insert(index, vec![vec![local_peer_id.clone().as_bytes().to_vec()]]);
             break;
         }
     }
@@ -99,6 +107,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "sign_notify",
+        index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
         PartyType::SignNotify
     );
@@ -107,7 +116,7 @@ pub async fn gg20_sign_client(
     loop {
         if let Ok(peer_ids) = peer_ids.try_read() {
             if (peer_ids.len() as u16) == params.threshold.parse::<u16>().unwrap() + 1 {
-                party_num_int = get_party_num(&peer_ids, &local_peer_id.as_bytes().to_vec());
+                party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
                 break;
             }
         }
@@ -118,6 +127,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "round0",
+        index,
         serde_json::to_string(&keypair.party_num_int_s).unwrap(),
         PartyType::Sign
     );
@@ -126,7 +136,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round0"
+        "round0",
+        index,
     );
 
     let mut j = 0;
@@ -155,6 +166,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "round1",
+        index,
         serde_json::to_string(&(
             res_stage1.bc1.clone(),
             res_stage1.m_a.0.clone(),
@@ -168,7 +180,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round1"
+        "round1",
+        index,
     );
 
     let mut j = 0;
@@ -236,6 +249,7 @@ pub async fn gg20_sign_client(
                 party_num_int,
                 i,
                 "round2",
+                index,
                 serde_json::to_string(&(
                     res_stage2.gamma_i_vec[j].0.clone(),
                     beta_enc,
@@ -254,7 +268,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round2"
+        "round2",
+        index,
     );
 
     let mut m_b_gamma_rec_vec: Vec<MessageB> = Vec::new();
@@ -307,6 +322,7 @@ pub async fn gg20_sign_client(
                 party_num_int,
                 i,
                 "round3",
+                index,
                 serde_json::to_string(&(alpha_enc, miu_enc)).unwrap(),
                 PartyType::Sign
             );
@@ -319,7 +335,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round3"
+        "round3",
+        index,
     );
     let mut alpha_vec = vec![];
     let mut miu_vec = vec![];
@@ -348,6 +365,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "round4",
+        index,
         serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i,)).unwrap(),
         PartyType::Sign
     );
@@ -356,7 +374,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round4"
+        "round4",
+        index,
     );
     let mut delta_i_vec = vec![];
     let mut decom1_vec = vec![];
@@ -389,6 +408,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "round5",
+        index,
         serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(),)).unwrap(),
         PartyType::Sign
     );
@@ -397,7 +417,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round5"
+        "round5",
+        index,
     );
     let mut R_vec = vec![];
     let mut R_dash_vec = vec![];
@@ -436,6 +457,7 @@ pub async fn gg20_sign_client(
         tx.clone(),
         party_num_int,
         "round6",
+        index,
         serde_json::to_string(&res_stage6.local_sig.clone()).unwrap(),
         PartyType::Sign
     );
@@ -444,7 +466,8 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round6"
+        "round6",
+        index,
     );
     let mut local_sig_vec = vec![];
     let mut j = 0;
@@ -479,21 +502,13 @@ pub async fn gg20_sign_client(
     ))
     .unwrap();
 
-    fs::write("signature".to_string(), sign_json).expect("Unable to save !");
+    fs::write(store.to_string(), sign_json).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     // println!("total time: {:?}", difference);
     info!(target: "afg", "----------------------------------------------------------------");
     info!(target: "afg", "sign time is: {:?}", difference);
     info!(target: "afg", "----------------------------------------------------------------");
-
-    // TODO: this for test, in the future, the database will be kept
-    if let Ok(mut db) = peer_ids.write() {
-        db.clear();
-    }
-    if let Ok(mut db) = db_mtx.write() {
-        db.clear();
-    }
 
     // TODO: should send the result to the chain
     Ok(TssResult::SignResult())

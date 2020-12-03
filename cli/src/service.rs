@@ -15,7 +15,7 @@ use sp_runtime::traits::Block as BlockT;
 use futures::prelude::*;
 use sc_client_api::{ExecutorProvider, RemoteBackend};
 use sp_core::traits::BareCryptoStorePtr;
-use threshold::{self, run_threshold};
+// use threshold::{self, run_threshold};
 use crate::executor::Executor;
 
 type FullClient = sc_service::TFullClient<Block, RuntimeApi, Executor>;
@@ -319,21 +319,17 @@ pub fn new_full_base(
 		)?;
 	}
 
-	let (_tss_command_tx, tss_link) = threshold::block_import(client.clone(), select_chain.clone()).unwrap();
-	let config = threshold::Config {
-		gossip_duration: std::time::Duration::from_millis(25),
-		name: Some(name)
-	};
-	let tss_params = threshold::TssParams {
-		config,
-		link: tss_link,
-		network: network.clone(),
-		telemetry_on_connect: Some(telemetry_connection_sinks.on_connect_stream()),
-	};
-	task_manager.spawn_essential_handle().spawn_blocking(
-		"tss-p2p",
-		run_threshold(tss_params)?
-	);
+	// let tss_params = threshold::TssParams {
+	// 	network: network.clone(),
+	// 	pool: transaction_pool.clone(),
+	// 	tss_command_tx,
+	// 	keystore: keystore.clone()
+	// };
+	//
+	// task_manager.spawn_essential_handle().spawn_blocking(
+	// 	"tss-p2p",
+	// 	run_threshold(tss_params)?
+	// );
 
 	network_starter.start_network();
 	Ok(NewFullBase {

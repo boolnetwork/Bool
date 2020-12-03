@@ -4,7 +4,8 @@ members = [
     "rpc",
     "runtime",
     "cli",
-    "threshold",
+#    "threshold",
+#    "pallet-tss",
 ]
 
 [profile.release]
