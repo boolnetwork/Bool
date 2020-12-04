@@ -63,7 +63,6 @@ pub async fn gg20_keygen_client (
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id: PeerId = PeerId::from(local_key.public());
-    info!(target: "afg", "local peer id is: {:?}", local_peer_id.clone().as_bytes().to_vec());
 
     // tell other node the local_peer_id
     broadcast_ch(
@@ -85,7 +84,7 @@ pub async fn gg20_keygen_client (
             }
         }
     }
-    info!(target: "afg", "my party_num is: {:?} **********************************************", party_num_int);
+
     let input_stage1 = KeyGenStage1Input {
         index: (party_num_int - 1) as usize,
     };
@@ -130,7 +129,6 @@ pub async fn gg20_keygen_client (
         "round2",
         index,
     );
-    info!(target: "afg", "keygen half **********************************************");
     let mut decom1_vec = round2_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenDecommitMessage1>(m).unwrap())
@@ -313,9 +311,7 @@ pub async fn gg20_keygen_client (
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     // println!("total time: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
-    info!(target: "afg", "keygen time is: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
+    // info!(target: "afg", "keygen time is: {:?}", difference);
 
     // TODO: should result the result to the chain
     Ok(TssResult::KeygenResult())

@@ -293,7 +293,6 @@ impl <V,B>TssSender<V,B>
         //     _ => return ,
         // }
         self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t)).expect("send command failed");
-        info!(target: "afg", "get keygen event and send command************************************");
     }
 
     fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16) /*-> Option<Vec<u8>>*/{

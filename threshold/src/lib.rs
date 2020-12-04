@@ -174,7 +174,6 @@ impl<Block: BlockT> Future for Worker<Block> {
             },
             Poll::Ready(Some(command)) => {
                 // some command issued externally
-                info!(target: "afg", "get command to run -------------------------");
                 self.handle_worker_command(command);
                 cx.waker().wake_by_ref();
             }
@@ -206,7 +205,6 @@ impl<Block: BlockT> Future for Worker<Block> {
                         match data {
                             GossipMessage::Chat(data) => {
                                 let entry: Entry = serde_json::from_str(&data).unwrap();
-                                info!(target: "afg", "get chat message***********************");
                                 loop {
                                     if let Ok(mut db) = self.db_mtx.try_write() {
                                         db.insert(entry.key.clone(), entry.value.clone());
@@ -219,14 +217,12 @@ impl<Block: BlockT> Future for Worker<Block> {
                                 let index = entry.key.clone().as_str().split('-').collect::<Vec<&str>>()
                                     .pop().unwrap().parse::<u64>().unwrap();
                                 let data: Vec<u8> = serde_json::from_str(&entry.value).unwrap();
-                                info!(target: "afg", "get notify message***********************");
                                 loop {
                                     if let Ok(mut db) = self.id_list.try_write() {
                                         if let Some(mut vv) = db.get_mut(&index).cloned() {
                                             if !vec_contains_vecu8(&vv, &data){
                                                 vv.push(data.clone());
                                             }
-                                            info!(target: "afg", "the ids are: {:?}", vv);
                                             db.insert(index, vv);
                                         } else { db.insert(index, vec![data]); }
                                         break;
