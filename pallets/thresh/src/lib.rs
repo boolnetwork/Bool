@@ -67,7 +67,6 @@ impl Default for GroupState {
     }
 }
 
-//TODO maybe add group id for index.
 /// A selected partner group
 #[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
 pub struct ThresholdGroup<AccountId> {
@@ -147,8 +146,8 @@ decl_error! {
         AlreadyJoined,
         NoPermission,
         NoGroup,
-		NotWorking,
-		
+        NotWorking,
+        NotStandby,
     }
 }
 
@@ -165,7 +164,7 @@ decl_module! {
 
             ensure!(!<Partner<T>>::contains_key(&actor), Error::<T>::AlreadyJoined);
             ensure!(value > <MinimumLock<T>>::get(), Error::<T>::InsufficientValue);
-            ensure!(value > T::Currency::minimum_balance(), Error::<T>::InsufficientBalance);
+            ensure!(value < T::Currency::free_balance(&actor), Error::<T>::InsufficientBalance);
 
             let item = ThresholdPartner {
                 who: actor.clone(),
@@ -185,6 +184,7 @@ decl_module! {
 
             let mut partner = Self::partner(&actor).ok_or(Error::<T>::NotJoined)?;
 
+            // TODO get usable balance.
             let actor_balance = T::Currency::free_balance(&actor);
 
             if let Some(extra) = actor_balance.checked_sub(&partner.active) {
@@ -192,6 +192,8 @@ decl_module! {
                 partner.active += extra;
                 Self::update_partner(&actor, &partner);
                 Self::deposit_event(RawEvent::Joined(actor, extra));
+            } else {
+                Err(Error::<T>::InsufficientValue)?
             }
 
             Ok(())
@@ -217,7 +219,7 @@ decl_module! {
                 public: Default::default(),
             };
 
-            TryGroups::mutate(|s| { s.push(c); *s});
+            TryGroups::mutate(|s| { s.push(c); });
             <Groups<T>>::insert(c, group);
             Self::deposit_event(RawEvent::TryGroup(c, mode, partners));
 
@@ -258,11 +260,11 @@ decl_module! {
             Ok(())
         }
 
+        /// The private key was exchanged successfully and proof was provided
         #[weight = 0]
         pub fn exchange(origin, gi: GroupIndex, ) -> DispatchResult {
             let _actor = ensure_signed(origin)?;
-
-
+            // TODO
             Ok(())
         }
 
@@ -271,7 +273,7 @@ decl_module! {
             let actor = ensure_signed(origin)?;
 
             let partner = Self::partner(&actor).ok_or(Error::<T>::NotJoined)?;
-            ensure!(partner.state == PartnerState::Standby, Error::<T>::);
+            ensure!(partner.state == PartnerState::Standby, Error::<T>::NotStandby);
 
             <Partner<T>>::remove(&actor);
             // remove the lock.
@@ -284,6 +286,7 @@ decl_module! {
         /// Report the partner who committed the crime
         #[weight = 0]
         pub fn blame_report(origin) -> DispatchResult {
+            // TODO
             Ok(())
         }
     }
