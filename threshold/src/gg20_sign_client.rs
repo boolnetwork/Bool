@@ -85,8 +85,8 @@ pub async fn gg20_sign_client(
 
     //read parameters:
     let params: Params = Params {
-        parties: t,
-        threshold: n,
+        parties: t.to_string(),
+        threshold: n.to_string(),
     };
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
@@ -94,13 +94,6 @@ pub async fn gg20_sign_client(
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id: PeerId = PeerId::from(local_key.public());
-    loop{
-        if let Ok(mut peer_ids) = peer_ids.try_write() {
-            (*peer_ids).insert(index, vec![vec![local_peer_id.clone().as_bytes().to_vec()]]);
-            break;
-        }
-    }
-
 
     // tell other node the local_peer_id
     broadcast_ch(
@@ -109,15 +102,17 @@ pub async fn gg20_sign_client(
         "sign_notify",
         index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        PartyType::SignNotify
+        PartyType::Notify
     );
 
     // get party_num_int
     loop {
         if let Ok(peer_ids) = peer_ids.try_read() {
-            if (peer_ids.len() as u16) == params.threshold.parse::<u16>().unwrap() + 1 {
-                party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
-                break;
+            if let Some(_) = peer_ids.get(&index) {
+                if ((*peer_ids.get(&index).unwrap()).len() as u16) == params.threshold.parse::<u16>().unwrap() + 1 {
+                    party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
+                    break;
+                }
             }
         }
     }
@@ -129,7 +124,7 @@ pub async fn gg20_sign_client(
         "round0",
         index,
         serde_json::to_string(&keypair.party_num_int_s).unwrap(),
-        PartyType::Sign
+        PartyType::Chat
     );
     let round0_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -173,7 +168,7 @@ pub async fn gg20_sign_client(
             res_stage1.sign_keys.g_w_i
         ))
         .unwrap(),
-        PartyType::Sign
+        PartyType::Chat
     );
     let round1_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -257,7 +252,7 @@ pub async fn gg20_sign_client(
                     ni_enc,
                 ))
                 .unwrap(),
-                PartyType::Sign
+                PartyType::Chat
             );
             j += 1;
         }
@@ -324,7 +319,7 @@ pub async fn gg20_sign_client(
                 "round3",
                 index,
                 serde_json::to_string(&(alpha_enc, miu_enc)).unwrap(),
-                PartyType::Sign
+                PartyType::Chat
             );
             j += 1;
         }
@@ -367,7 +362,7 @@ pub async fn gg20_sign_client(
         "round4",
         index,
         serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i,)).unwrap(),
-        PartyType::Sign
+        PartyType::Chat
     );
     let round4_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -410,7 +405,7 @@ pub async fn gg20_sign_client(
         "round5",
         index,
         serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(),)).unwrap(),
-        PartyType::Sign
+        PartyType::Chat
     );
     let round5_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -459,7 +454,7 @@ pub async fn gg20_sign_client(
         "round6",
         index,
         serde_json::to_string(&res_stage6.local_sig.clone()).unwrap(),
-        PartyType::Sign
+        PartyType::Chat
     );
     let round6_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -502,7 +497,7 @@ pub async fn gg20_sign_client(
     ))
     .unwrap();
 
-    fs::write(store.to_string(), sign_json).expect("Unable to save !");
+    fs::write(String::from_utf8_lossy(&store).into_owned(), sign_json).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     // println!("total time: {:?}", difference);

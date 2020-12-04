@@ -7,18 +7,15 @@ use sc_client_api::{
     backend::{AuxStore, Backend},
     LockImportRun, BlockchainEvents, Finalizer, TransactionFor, ExecutorProvider,
 };
-// use parity_scale_codec::{Encode, Decode};
 use sp_api::{ProvideRuntimeApi, CallApiAt};
 use sp_blockchain::{HeaderBackend, Error as ClientError, HeaderMetadata};
 use sp_runtime::traits::Block as BlockT;
-use sp_consensus::{SelectChain, BlockImport};
 use sp_transaction_pool::{TransactionPool};
 use sc_keystore::KeyStorePtr;
 use sc_block_builder::{BlockBuilderProvider};
 use sc_network::PeerId;
 use sc_network_gossip::GossipEngine;
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
-// use sc_telemetry::{telemetry, CONSENSUS_INFO, CONSENSUS_DEBUG};
 use parking_lot::{Mutex};
 use async_std;
 use std::collections::{HashSet, HashMap};
@@ -33,7 +30,7 @@ mod gg20_keygen_client;
 mod gg20_sign_client;
 mod common;
 mod listening;
-use common::{GossipMessage, TssResult, Key, Entry, MissionParam};
+use common::{GossipMessage, TssResult, Key, Entry, MissionParam, vec_contains_vecu8};
 use gg20_keygen_client::{gg20_keygen_client};
 use gg20_sign_client::{gg20_sign_client};
 use communicate::{NetworkBridge, Error, Network as NetworkT};
@@ -94,39 +91,29 @@ impl<Block: BlockT, N: NetworkT<Block> + Sync> Future for TssWork<Block, N>
 }
 
 pub struct Worker<B: BlockT> {
-    keygen_db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    sign_db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    keygen_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
-    sign_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    db_mtx: Arc<RwLock<HashMap<Key, String>>>,
+    id_list: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
     low_sender: Arc<Mutex<TracingUnboundedSender<String>>>,
     low_receiver: TracingUnboundedReceiver<String>,
     gossip_engine: Arc<Mutex<GossipEngine<B>>>,
     command_rx: TracingUnboundedReceiver<WorkerCommand>,
     messages: HashSet<Vec<u8>>,
-    // counter: u16,
-    // start_time: SystemTime,
 }
 
 impl<B: BlockT> Worker<B> {
     pub fn new(gossip_engine: Arc<Mutex<GossipEngine<B>>>, command_rx: TracingUnboundedReceiver<WorkerCommand>) -> Self {
-        let keygen_db_mtx = Arc::new(RwLock::new(HashMap::new()));
-        let sign_db_mtx = Arc::new(RwLock::new(HashMap::new()));
-        let keygen_ids = Arc::new(RwLock::new(HashMap::new()));
-        let sign_ids = Arc::new(RwLock::new(HashMap::new()));
+        let db_mtx = Arc::new(RwLock::new(HashMap::new()));
+        let id_list = Arc::new(RwLock::new(HashMap::new()));
         let (low_sender, low_receiver) = tracing_unbounded("mpsc_mission_worker");
         let low_sender = Arc::new(Mutex::new(low_sender));
         Worker {
-            keygen_db_mtx,
-            sign_db_mtx,
-            keygen_ids,
-            sign_ids,
+            db_mtx,
+            id_list,
             low_sender,
             low_receiver,
             gossip_engine,
             command_rx,
             messages: HashSet::new(),
-            // counter: 0,
-            // start_time: SystemTime::now()
         }
     }
 
@@ -144,8 +131,8 @@ impl<B: BlockT> Worker<B> {
                 };
                 let mission = async_std::task::spawn(gg20_keygen_client(
                         self.low_sender.clone(),
-                        self.keygen_db_mtx.clone(),
-                        self.keygen_ids.clone(),
+                        self.db_mtx.clone(),
+                        self.id_list.clone(),
                         mission_param
                     ));
                 // TODO: return the result to chain
@@ -162,8 +149,8 @@ impl<B: BlockT> Worker<B> {
                 };
                 let mission = async_std::task::spawn(gg20_sign_client(
                     self.low_sender.clone(),
-                    self.keygen_db_mtx.clone(),
-                    self.keygen_ids.clone(),
+                    self.db_mtx.clone(),
+                    self.id_list.clone(),
                     mission_param
                 ));
                 // TODO: return the result to chain
@@ -187,6 +174,7 @@ impl<Block: BlockT> Future for Worker<Block> {
             },
             Poll::Ready(Some(command)) => {
                 // some command issued externally
+                info!(target: "afg", "get command to run -------------------------");
                 self.handle_worker_command(command);
                 cx.waker().wake_by_ref();
             }
@@ -216,46 +204,31 @@ impl<Block: BlockT> Future for Worker<Block> {
                         let data = String::from_utf8_lossy(&notification.message);
                         let data: GossipMessage = serde_json::from_str(&data).unwrap();
                         match data {
-                            GossipMessage::Keygen(data) => {
+                            GossipMessage::Chat(data) => {
                                 let entry: Entry = serde_json::from_str(&data).unwrap();
+                                info!(target: "afg", "get chat message***********************");
                                 loop {
-                                    if let Ok(mut db) = self.keygen_db_mtx.try_write() {
+                                    if let Ok(mut db) = self.db_mtx.try_write() {
                                         db.insert(entry.key.clone(), entry.value.clone());
                                         break;
                                     }
                                 }
                             },
-                            GossipMessage::Sign(data) => {
+                            GossipMessage::Notify(data) => {
                                 let entry: Entry = serde_json::from_str(&data).unwrap();
-                                loop {
-                                    if let Ok(mut db) = self.sign_db_mtx.try_write() {
-                                        db.insert(entry.key.clone(), entry.value.clone());
-                                        break;
-                                    }
-                                }
-                            },
-                            GossipMessage::KeygenNotify(data) => {
-                                let entry: Entry = serde_json::from_str(&data).unwrap();
-                                let index = entry.key.clone().as_str().split('-').pop().parse::<u64>();
+                                let index = entry.key.clone().as_str().split('-').collect::<Vec<&str>>()
+                                    .pop().unwrap().parse::<u64>().unwrap();
                                 let data: Vec<u8> = serde_json::from_str(&entry.value).unwrap();
+                                info!(target: "afg", "get notify message***********************");
                                 loop {
-                                    if let Ok(mut db) = self.keygen_ids.try_write() {
-                                        let vv = *db.get(index).unwrap().clone();
-                                        vv.insert(index, data.clone());
-                                        db.insert(index, vv);
-                                        break;
-                                    }
-                                }
-                            },
-                            GossipMessage::SignNotify(data) => {
-                                let entry: Entry = serde_json::from_str(&data).unwrap();
-                                let index = entry.key.clone().as_str().split('-').pop().parse::<u64>();
-                                let data: Vec<u8> = serde_json::from_str(&entry.value).unwrap();
-                                loop {
-                                    if let Ok(mut db) = self.sign_ids.try_write() {
-                                        let vv = *db.get(index).unwrap().clone();
-                                        vv.insert(index, data.clone());
-                                        db.insert(index, vv);
+                                    if let Ok(mut db) = self.id_list.try_write() {
+                                        if let Some(mut vv) = db.get_mut(&index).cloned() {
+                                            if !vec_contains_vecu8(&vv, &data){
+                                                vv.push(data.clone());
+                                            }
+                                            info!(target: "afg", "the ids are: {:?}", vv);
+                                            db.insert(index, vv);
+                                        } else { db.insert(index, vec![data]); }
                                         break;
                                     }
                                 }
@@ -296,13 +269,6 @@ where
 
     let network = NetworkBridge::new(network);
 
-    // let telemetry_task = if let Some(telemetry_on_connect) = telemetry_on_connect {
-    //     let events = future::ready(());
-    //     future::Either::Left(events)
-    // } else {
-    //     future::Either::Right(future::pending())
-    // };
-
     let work = TssWork::new(
         command_rx,
         network,
@@ -313,34 +279,8 @@ where
         Err(e) => error!(target: "afg", "tss work error: {:?}", e),
     });
 
-    // // Make sure that `telemetry_task` doesn't accidentally finish and kill tss.
-    // let telemetry_task = telemetry_task
-    //     .then(|_| future::pending::<()>());
-
     let listener = start_listener(client, pool, command_tx, keystore).then(|_| future::pending::<()>());
 
     Ok(future::select(work, listener).map(drop))
 }
 
-/// A trait that includes all the client functionalities tss requires.
-/// Ideally this would be a trait alias, we're not there yet.
-/// tracking issue https://github.com/rust-lang/rust/issues/41517
-pub trait ClientForTss<Block, BE>:
-LockImportRun<Block, BE> + Finalizer<Block, BE> + AuxStore
-+ HeaderMetadata<Block, Error = sp_blockchain::Error> + HeaderBackend<Block>
-+ BlockchainEvents<Block> + ProvideRuntimeApi<Block> + ExecutorProvider<Block>
-+ BlockImport<Block, Transaction = TransactionFor<BE, Block>, Error = sp_consensus::Error>
-    where
-        BE: Backend<Block>,
-        Block: BlockT,
-{}
-
-impl<Block, BE, T> ClientForTss<Block, BE> for T
-    where
-        BE: Backend<Block>,
-        Block: BlockT,
-        T: LockImportRun<Block, BE> + Finalizer<Block, BE> + AuxStore
-        + HeaderMetadata<Block, Error = sp_blockchain::Error> + HeaderBackend<Block>
-        + BlockchainEvents<Block> + ProvideRuntimeApi<Block> + ExecutorProvider<Block>
-        + BlockImport<Block, Transaction = TransactionFor<BE, Block>, Error = sp_consensus::Error>,
-{}

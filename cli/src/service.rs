@@ -15,7 +15,7 @@ use sp_runtime::traits::Block as BlockT;
 use futures::prelude::*;
 use sc_client_api::{ExecutorProvider, RemoteBackend};
 use sp_core::traits::BareCryptoStorePtr;
-// use threshold::{self, run_threshold};
+use threshold::{self, run_threshold};
 use crate::executor::Executor;
 
 type FullClient = sc_service::TFullClient<Block, RuntimeApi, Executor>;
@@ -269,6 +269,18 @@ pub fn new_full_base(
 		task_manager.spawn_handle().spawn("authority-discovery-worker", authority_discovery_worker);
 	}
 
+	let tss_params = threshold::TssParams {
+		client: client.clone(),
+		pool: transaction_pool.clone(),
+		network: network.clone(),
+		keystore: keystore.clone()
+	};
+
+	task_manager.spawn_essential_handle().spawn_blocking(
+		"tss-p2p",
+		run_threshold(tss_params)?
+	);
+
 	// if the node isn't actively participating in consensus then it doesn't
 	// need a keystore, regardless of which protocol we use below.
 	let keystore = if role.is_authority() {
@@ -318,18 +330,6 @@ pub fn new_full_base(
 			network.clone(),
 		)?;
 	}
-
-	// let tss_params = threshold::TssParams {
-	// 	network: network.clone(),
-	// 	pool: transaction_pool.clone(),
-	// 	tss_command_tx,
-	// 	keystore: keystore.clone()
-	// };
-	//
-	// task_manager.spawn_essential_handle().spawn_blocking(
-	// 	"tss-p2p",
-	// 	run_threshold(tss_params)?
-	// );
 
 	network_starter.start_network();
 	Ok(NewFullBase {

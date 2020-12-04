@@ -1,6 +1,5 @@
 
-use std::{sync::Arc, u64};
-
+use std::{sync::Arc};
 use sp_runtime::{
     generic::{BlockId ,Era},
     traits::{Block as BlockT, Zero}
@@ -30,7 +29,7 @@ use bool_runtime::{
 };
 
 use frame_system::{Call as SystemCall};
-// use pallet_tss::{Call as TssCall};
+use pallet_tss::{Call as TssCall};
 
 pub use bool_primitives::{AccountId, Signature, Balance, Index};
 use sp_core::storage::{StorageKey, StorageData};
@@ -46,15 +45,14 @@ use bool_primitives::Hash;
 use frame_system::EventRecord;
 
 use pallet_tss::{RawEvent};
-use std::thread;
 use sp_utils::mpsc::{TracingUnboundedSender};
 
 use futures::channel::mpsc;
 
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
-    Keygen(u64, Vec<u8>, u64, u64),
-    Sign(u64, Vec<u8>, u64, u64)
+    Keygen(u64, Vec<u8>, u16, u16),
+    Sign(u64, Vec<u8>, u16, u16)
 }
 
 pub enum TssRole{
@@ -260,6 +258,7 @@ pub struct TssSender<V,B> {
     pub tss: u64,
     pub command_tx: TracingUnboundedSender<WorkerCommand>,
     pub a: std::marker::PhantomData<B>,
+    pub mission_counter: Arc<Mutex<u64>>,
 }
 
 impl <V,B>TssSender<V,B>
@@ -272,10 +271,15 @@ impl <V,B>TssSender<V,B>
             tss: 5,
             command_tx,
             a: PhantomData,
+            mission_counter: Arc::new(Mutex::new(0)),
         }
     }
 
-    fn key_gen(&self, index: u64, store: Vec<u8>, n: u64, t: u64){
+    fn set_counter(&mut self, index: u64) {
+        *self.mission_counter.lock() = index;
+    }
+
+    fn key_gen(&self, index: u64, store: Vec<u8>, n: u16, t: u16){
         let store2 = "boolbtc.store";
         // TODO: need return result in the future
         // match key_gen(store2){
@@ -288,20 +292,21 @@ impl <V,B>TssSender<V,B>
         //     },
         //     _ => return ,
         // }
-        self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t));
+        self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t)).expect("send command failed");
+        info!(target: "afg", "get keygen event and send command************************************");
     }
 
-    fn key_sign(&self, index: u64, store: Vec<u8>, n: u64, t: u64) /*-> Option<Vec<u8>>*/{
+    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16) /*-> Option<Vec<u8>>*/{
         // let pubkey = self.spv.tss_pubkey();
         // debug!(target:"keysign", "pubkey {:?}", pubkey);
-        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t));
+        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t)).expect("send command failed");
     }
 
     fn get_stream(&self, events_key:StorageKey) -> StorageEventStream<B::Hash> {
         self.spv.get_notification_stream(Some(&[events_key]), None)
     }
 
-    pub fn start(self, _role: TssRole) -> impl Future<Output=()> + Send + 'static {
+    pub fn start(mut self, _role: TssRole) -> impl Future<Output=()> + Send + 'static {
         let events_key = StorageKey(b"System Events".as_prefix_key());
 
         let storage_stream: StorageEventStream<B::Hash> = self.get_stream(events_key);
@@ -324,10 +329,16 @@ impl <V,B>TssSender<V,B>
                     if let Event::pallet_tss(e) = event {
                         match e {
                             RawEvent::GenKey(index, store, n, t, _time) => {
-                                self.key_gen(*index, *store, *n, *t);
+                                if *self.mission_counter.lock() != *index {
+                                    self.key_gen(*index, (*store).to_vec(), *n, *t);
+                                    self.set_counter(*index);
+                                }
                             },
                             RawEvent::Sign(index, store, n, t, _time) => {
-                                self.key_sign(*index, *store, *n, *t);
+                                if *self.mission_counter.lock() != *index {
+                                    self.key_sign(*index, (*store).to_vec(), *n, *t);
+                                    self.set_counter(*index);
+                                }
                             },
                             _ => {}
                         }
@@ -335,7 +346,7 @@ impl <V,B>TssSender<V,B>
                 });
                 futures::future::ready(())
             });
-        storage_stream//.select(on_exit).then(|_| Ok(()))
+        storage_stream
     }
 }
 

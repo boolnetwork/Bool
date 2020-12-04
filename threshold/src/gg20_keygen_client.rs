@@ -50,9 +50,7 @@ pub async fn gg20_keygen_client (
         n,
         t
     } = mission_params;
-    // let params: Parameters = serde_json::from_str::<Params>(
-    //     &std::fs::read_to_string("params.json").expect("Could not read input params file"),
-    // ).unwrap().into();
+
     let params: Parameters = Parameters {
         share_count: n,
         threshold: t
@@ -65,12 +63,7 @@ pub async fn gg20_keygen_client (
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id: PeerId = PeerId::from(local_key.public());
-    loop{
-        if let Ok(mut peer_ids) = peer_ids.try_write() {
-            (*peer_ids).insert(index, vec![vec![local_peer_id.clone().as_bytes().to_vec()]]);
-            break;
-        }
-    }
+    info!(target: "afg", "local peer id is: {:?}", local_peer_id.clone().as_bytes().to_vec());
 
     // tell other node the local_peer_id
     broadcast_ch(
@@ -79,18 +72,20 @@ pub async fn gg20_keygen_client (
         "keygen_notify",
         index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        PartyType::KeygenNotify
+        PartyType::Notify
     );
     // get party_num_int
     loop{
         if let Ok(peer_ids) = peer_ids.try_read() {
-            if (peer_ids.len() as u16) == params_lis.share_count {
-                party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
-                break;
+            if let Some(_) = peer_ids.get(&index) {
+                if ((*peer_ids.get(&index).unwrap()).len() as u16) == params_lis.share_count {
+                    party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
+                    break;
+                }
             }
         }
     }
-
+    info!(target: "afg", "my party_num is: {:?} **********************************************", party_num_int);
     let input_stage1 = KeyGenStage1Input {
         index: (party_num_int - 1) as usize,
     };
@@ -103,7 +98,7 @@ pub async fn gg20_keygen_client (
         "round1",
         index,
         serde_json::to_string(&res_stage1.bc_com1_l).unwrap(),
-        PartyType::Keygen
+        PartyType::Chat
     );
     let round1_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -125,7 +120,7 @@ pub async fn gg20_keygen_client (
         "round2",
         index,
         serde_json::to_string(&res_stage1.decom1_l).unwrap(),
-        PartyType::Keygen
+        PartyType::Chat
     );
     let round2_ans_vec = poll_for_broadcasts_ch(
         db_mtx.clone(),
@@ -135,6 +130,7 @@ pub async fn gg20_keygen_client (
         "round2",
         index,
     );
+    info!(target: "afg", "keygen half **********************************************");
     let mut decom1_vec = round2_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenDecommitMessage1>(m).unwrap())
@@ -184,7 +180,7 @@ pub async fn gg20_keygen_client (
                 "round3",
                 index,
                 serde_json::to_string(&aead_pack_i).unwrap(),
-                PartyType::Keygen
+                PartyType::Chat
             );
             j += 1;
         }
@@ -221,7 +217,7 @@ pub async fn gg20_keygen_client (
         "round4",
         index,
         serde_json::to_string(&res_stage2.vss_scheme_s).unwrap(),
-        PartyType::Keygen
+        PartyType::Chat
     );
 
     //get vss_scheme for others.
@@ -262,7 +258,7 @@ pub async fn gg20_keygen_client (
         "round5",
         index,
         serde_json::to_string(&res_stage3.dlog_proof_s).unwrap(),
-        PartyType::Keygen
+        PartyType::Chat
     );
 
     let round5_ans_vec = poll_for_broadcasts_ch(
@@ -309,7 +305,7 @@ pub async fn gg20_keygen_client (
         h1_h2_N_tilde_vec_s: h1_h2_N_tilde_vec,
     };
     fs::write(
-        store.to_string(),
+        String::from_utf8_lossy(&store).into_owned(),
         serde_json::to_string(&party_key_pair).unwrap(),
     )
     .expect("Unable to save !");

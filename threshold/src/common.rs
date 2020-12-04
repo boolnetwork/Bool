@@ -30,26 +30,22 @@ pub struct AEAD {
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum GossipMessage {
-    Keygen(String),
-    Sign(String),
-    KeygenNotify(String),
-    SignNotify(String),
+    Chat(String),
+    Notify(String),
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct MissionParam {
-    index: u64,
-    store: Vec<u8>,
-    n: u16,
-    t: u16
+    pub index: u64,
+    pub store: Vec<u8>,
+    pub n: u16,
+    pub t: u16
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum PartyType {
-    Keygen,
-    Sign,
-    KeygenNotify,
-    SignNotify,
+    Chat,
+    Notify,
 }
 
 // TODO: need more details
@@ -117,10 +113,8 @@ pub fn broadcast_ch(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::KeygenNotify => GossipMessage::KeygenNotify(data),
-        PartyType::SignNotify => GossipMessage::SignNotify(data),
-        PartyType::Keygen => GossipMessage::Keygen(data),
-        PartyType::Sign => GossipMessage::Sign(data),
+        PartyType::Notify => GossipMessage::Notify(data),
+        PartyType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());
@@ -143,10 +137,8 @@ pub fn sendp2p_ch(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::KeygenNotify => GossipMessage::KeygenNotify(data),
-        PartyType::SignNotify => GossipMessage::SignNotify(data),
-        PartyType::Keygen => GossipMessage::Keygen(data),
-        PartyType::Sign => GossipMessage::Sign(data),
+        PartyType::Notify => GossipMessage::Notify(data),
+        PartyType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());
@@ -243,7 +235,7 @@ pub fn check_sig(r: &FE, s: &FE, msg: &BigInt, pk: &GE) {
 #[allow(dead_code)]
 pub fn get_party_num(index: u64, map: &HashMap<u64, Vec<Vec<u8>>>, id: &Vec<u8>) -> u16 {
     let mut res: u16 = 1;
-    for vv in *(map.get(*index).unwrap()).clone() {
+    for vv in map.get(&index).unwrap().clone() {
         if compare_id(id, &vv) {
             res += 1;
         }
@@ -257,4 +249,18 @@ fn compare_id(myid: &Vec<u8>, otid: &Vec<u8>) -> bool {
         else if (*myid)[i] > (*otid)[i] { return true; }
     }
     false
+}
+
+pub fn vec_contains_vecu8 (vec: &Vec<Vec<u8>>, value: &Vec<u8>) -> bool {
+    for num in vec.clone() {
+        if vecu8_equal(&num, value) { return true; }
+    }
+    false
+}
+
+fn vecu8_equal(v1: &Vec<u8>, v2: &Vec<u8>) -> bool {
+    for i in 0..(*v1).len() {
+        if v1[i] != v2[i] { return false; }
+    }
+    true
 }
