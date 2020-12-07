@@ -74,8 +74,13 @@ pub struct ThresholdGroup<AccountId> {
     pub mode: ThreshMode,
     pub partners: Vec<AccountId>,
     pub state: GroupState,
-    pub public: ThreshPublic,
-    pub score: u64,
+    pub public: ThreshPublic
+}
+
+#[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
+pub struct CK<AccountId> {
+    from: AccountId,
+    to: AccountId,
 }
 
 impl<AccountId> ThresholdGroup<AccountId>
@@ -143,12 +148,14 @@ decl_error! {
         InsufficientValue,
         InsufficientBalance,
         InsufficientPartner,
+        NotTryGroup,
         NotJoined,
         AlreadyJoined,
         NoPermission,
         NoGroup,
         NotWorking,
         NotStandby,
+        DecodeError,
     }
 }
 
@@ -252,7 +259,7 @@ decl_module! {
 
             let try_groups = TryGroups::get();
             if try_groups.is_empty() || !try_groups.contains(&gi){
-                Err(Error::<T>::InsufficientPartner)?
+                Err(Error::<T>::NotTryGroup)?
             }
 
             // TODO check proof
@@ -275,15 +282,28 @@ decl_module! {
             // select a partner not in group.
             let receiver = Self::select_partner_without_group(gi);
 
+            // update state
+
             Self::deposit_event(RawEvent::TryExit(actor, receiver));
             Ok(())
         }
 
         /// The private key was exchanged successfully and proof was provided
         #[weight = 0]
-        pub fn exchange(origin, gi: GroupIndex) -> DispatchResult {
+        pub fn exchange(origin, gi: GroupIndex, msg: Vec<u8>, proof: Vec<u8>) -> DispatchResult {
             let _actor = ensure_signed(origin)?;
-            // TODO
+
+            let mut group = <Groups<T>>::get(&gi).ok_or(Error::<T>::NoGroup)?;
+            // TODO check proof
+
+            let ck: CK::<T::AccountId> = Decode::decode(&mut &msg[..]).map_err(|_|Error::<T>::DecodeError)?;
+            let from = ck.from;
+            let to = ck.to;
+            // update group
+            group.partners.retain(|p| p != &from);
+            group.partners.push(to);
+            <Groups<T>>::insert(gi, group);
+
             Ok(())
         }
 
@@ -318,4 +338,5 @@ impl<T: Trait> Module<T> {
     fn select_partner_without_group(index: GroupIndex) -> T::AccountId {
         T::AccountId::default()
     }
+
 }

@@ -1,6 +1,6 @@
 use crate::{mock::*, Error, ThreshMode, ThreshPublic};
 use frame_support::{assert_noop, assert_ok, dispatch::DispatchError};
-use frame_system::RawOrigin;
+use frame_system::{RawOrigin};
 
 const TEST_ACCOUNT: u64 = 5;
 
@@ -78,17 +78,27 @@ fn group_should_work() {
     new_test_ext().execute_with(|| {
         // try group on chain
         let mode = ThreshMode { t: 1, n: 3 };
-        assert_ok!(Thresh::try_group(RawOrigin::Root.into(), mode.clone()));
+        assert_ok!(Thresh::try_group(RawOrigin::Root.into(), mode));
         // check state
         assert_eq!(Thresh::try_groups().len(), 1);
         assert_eq!(Thresh::group_count(), 1);
-        // submit
+
+        assert_noop!(Thresh::group(
+            Origin::signed(1),
+            1,
+            ThreshPublic(vec![0x00]),
+            vec![0x00]
+        ), Error::<Test>::NotTryGroup);
+
+        // submit off chain proof
         assert_ok!(Thresh::group(
             Origin::signed(1),
             0,
             ThreshPublic(vec![0x00]),
             vec![0x00]
         ));
+
+
     });
 }
 
@@ -108,5 +118,8 @@ fn exit_group_should_work() {
             ThreshPublic(vec![0x00]),
             vec![0x00]
         ));
+
+        assert_ok!(Thresh::exit(Origin::signed(1), 0));
+
     });
 }
