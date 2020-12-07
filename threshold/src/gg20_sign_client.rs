@@ -56,7 +56,6 @@ pub struct PartyKeyPair {
     pub h1_h2_N_tilde_vec_s: Vec<DLogStatement>,
 }
 
-// #[allow(clippy::cognitive_complexity)]
 pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
@@ -68,8 +67,10 @@ pub async fn gg20_sign_client(
         index,
         store,
         n,
-        t
+        t,
+        local_peer_id
     } = mission_params;
+
     let message_str = "KZen Network".to_string();
     let message = match hex::decode(message_str.clone()) {
         Ok(x) => x,
@@ -91,9 +92,6 @@ pub async fn gg20_sign_client(
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
     let mut party_num_int: u16 = 0;
-
-    let local_key = identity::Keypair::generate_ed25519();
-    let local_peer_id: PeerId = PeerId::from(local_key.public());
 
     // tell other node the local_peer_id
     broadcast_ch(
@@ -500,10 +498,7 @@ pub async fn gg20_sign_client(
     fs::write(String::from_utf8_lossy(&store).into_owned(), sign_json).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    // println!("total time: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
     info!(target: "afg", "sign time is: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
 
     // TODO: should send the result to the chain
     Ok(TssResult::SignResult())

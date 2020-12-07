@@ -2,16 +2,10 @@
 use sp_runtime::traits::{Block as BlockT, Hash as HashT, Header as HeaderT};
 use sc_network_gossip::{MessageIntent, ValidatorContext};
 use sc_network::{ObservedRole, PeerId, ReputationChange};
-// use parity_scale_codec::{Encode, Decode};
-
-// use sc_telemetry::{telemetry, CONSENSUS_DEBUG};
-// use log::{trace, debug};
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 use std::sync::{Arc, RwLock};
 
-use std::collections::{HashSet};
-// use std::time::{Duration, Instant};
-// use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// The peers we're connected do in gossip.
 pub struct Peers {
@@ -72,7 +66,6 @@ impl<Block: BlockT> sc_network_gossip::Validator<Block> for GossipValidator {
         inner.peer_disconnected(who.clone());
     }
 
-    // TODO: need to complete it (see state_machine::on_incoming())
     /// Validate message.
     fn validate(
         &self,

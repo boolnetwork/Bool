@@ -14,13 +14,12 @@ use serde::{Deserialize, Serialize};
 use std::{fs, time};
 use zk_paillier::zkproofs::DLogStatement;
 
-use libp2p::{identity, PeerId};
+use libp2p::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
 use std::collections::{HashMap, HashSet};
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
-use std::time::{SystemTime};
-// use std::hash::{Hash, Hasher};
+use std::time::SystemTime;
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, PartyType,
@@ -43,12 +42,12 @@ pub async fn gg20_keygen_client (
     mission_params: MissionParam,
 ) -> Result<TssResult, ErrorType> {
     let totaltime = SystemTime::now();
-
     let MissionParam {
         index,
         store,
         n,
-        t
+        t,
+        local_peer_id
     } = mission_params;
 
     let params: Parameters = Parameters {
@@ -60,9 +59,6 @@ pub async fn gg20_keygen_client (
     let mut party_num_int: u16 = 0;
 
     let delay = time::Duration::from_millis(25);
-
-    let local_key = identity::Keypair::generate_ed25519();
-    let local_peer_id: PeerId = PeerId::from(local_key.public());
 
     // tell other node the local_peer_id
     broadcast_ch(
@@ -310,8 +306,7 @@ pub async fn gg20_keygen_client (
 
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    // println!("total time: {:?}", difference);
-    // info!(target: "afg", "keygen time is: {:?}", difference);
+    info!(target: "afg", "keygen time is: {:?} ***********************", difference);
 
     // TODO: should result the result to the chain
     Ok(TssResult::KeygenResult())

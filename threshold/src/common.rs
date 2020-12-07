@@ -10,8 +10,9 @@ use curv::{
     elliptic::curves::traits::{ECPoint, ECScalar},
     BigInt, FE, GE,
 };
+use sc_network::PeerId;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
@@ -39,7 +40,8 @@ pub struct MissionParam {
     pub index: u64,
     pub store: Vec<u8>,
     pub n: u16,
-    pub t: u16
+    pub t: u16,
+    pub local_peer_id: PeerId
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -162,7 +164,7 @@ pub fn poll_for_broadcasts_ch(
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
                         ans_vec.push(da);
-                        println!("[{:?}] party {:?} => party {:?}", round, i, party_num);
+                        // println!("[{:?}] party {:?} => party {:?}", round, i, party_num);
                         break;
                     }
                 }
@@ -191,7 +193,7 @@ pub fn poll_for_p2p_ch(
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
                         ans_vec.push(da);
-                        println!("[{:?}] party {:?} => party {:?}", round, i, party_num);
+                        // println!("[{:?}] party {:?} => party {:?}", round, i, party_num);
                         break;
                     }
                 }
