@@ -7,7 +7,7 @@ use frame_support::{
     traits::{Currency, Get, LockIdentifier, LockableCurrency, WithdrawReasons},
 };
 use frame_system::{ensure_root, ensure_signed};
-use sp_runtime::{traits::CheckedSub, RuntimeDebug};
+use sp_runtime::{traits::CheckedSub, RuntimeDebug, traits::{Zero}};
 
 #[cfg(test)]
 mod mock;
@@ -75,6 +75,7 @@ pub struct ThresholdGroup<AccountId> {
     pub partners: Vec<AccountId>,
     pub state: GroupState,
     pub public: ThreshPublic,
+    pub score: u64,
 }
 
 impl<AccountId> ThresholdGroup<AccountId>
@@ -199,6 +200,24 @@ decl_module! {
             Ok(())
         }
 
+        #[weight = 0]
+        pub fn withdraw(origin) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+
+            let partner = Self::partner(&actor).ok_or(Error::<T>::NotJoined)?;
+            ensure!(partner.state == PartnerState::Standby, Error::<T>::NotStandby);
+
+            <Partner<T>>::remove(&actor);
+            // remove the lock.
+            T::Currency::remove_lock(THRESHOLD_ID, &actor);
+
+            // remove from active list.
+            <ActivePartners<T>>::mutate(|aps| aps.retain(|x| x != &actor));
+
+            Self::deposit_event(RawEvent::Withdrawn(actor, partner.active));
+            Ok(())
+        }
+
         /// try to genesis key.
         #[weight = 0]
         pub fn try_group(origin, mode: ThreshMode) -> DispatchResult {
@@ -262,24 +281,9 @@ decl_module! {
 
         /// The private key was exchanged successfully and proof was provided
         #[weight = 0]
-        pub fn exchange(origin, gi: GroupIndex, ) -> DispatchResult {
+        pub fn exchange(origin, gi: GroupIndex) -> DispatchResult {
             let _actor = ensure_signed(origin)?;
             // TODO
-            Ok(())
-        }
-
-        #[weight = 0]
-        pub fn withdraw(origin) -> DispatchResult {
-            let actor = ensure_signed(origin)?;
-
-            let partner = Self::partner(&actor).ok_or(Error::<T>::NotJoined)?;
-            ensure!(partner.state == PartnerState::Standby, Error::<T>::NotStandby);
-
-            <Partner<T>>::remove(&actor);
-            // remove the lock.
-            T::Currency::remove_lock(THRESHOLD_ID, &actor);
-
-            Self::deposit_event(RawEvent::Withdrawn(actor, partner.active));
             Ok(())
         }
 
@@ -294,8 +298,15 @@ decl_module! {
 
 impl<T: Trait> Module<T> {
     fn update_partner(partner: &T::AccountId, info: &ThresholdPartner<T::AccountId, BalanceOf<T>>) {
-        T::Currency::set_lock(THRESHOLD_ID, &info.who, info.active, WithdrawReasons::all());
-        <Partner<T>>::insert(partner, info);
+		T::Currency::set_lock(THRESHOLD_ID, &info.who, info.active, WithdrawReasons::all());
+
+        // update state
+        <ActivePartners<T>>::mutate(|aps| {
+            if !aps.contains(&info.who) {
+                aps.push(info.who.clone());
+            }
+        });
+		<Partner<T>>::insert(partner, info);
     }
 
     fn select_partners(n: u32) -> Vec<T::AccountId> {

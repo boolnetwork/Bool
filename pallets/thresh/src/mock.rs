@@ -73,15 +73,25 @@ pub type System = frame_system::Module<Test>;
 pub type Balances = pallet_balances::Module<Test>;
 pub type Thresh = Module<Test>;
 
+pub const ACTIVE_COUNT: usize = 4;
+
+pub fn init(count: u64) {
+    for i in 1..=count {
+        Thresh::join(Origin::signed(i), 90);
+    }
+}
+
 // Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut t = system::GenesisConfig::default()
         .build_storage::<Test>()
         .unwrap();
     pallet_balances::GenesisConfig::<Test> {
-        balances: vec![(1, 100), (2, 100), (3, 100)],
+        balances: vec![(1, 100), (2, 100), (3, 100), (4, 100), (5, 100)],
     }
     .assimilate_storage(&mut t)
     .unwrap();
-    t.into()
+    let mut ext = sp_io::TestExternalities::new(t);
+    ext.execute_with(|| init(ACTIVE_COUNT as u64));
+    ext
 }
