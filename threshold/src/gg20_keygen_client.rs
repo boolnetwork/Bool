@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, time};
 use zk_paillier::zkproofs::DLogStatement;
 
-use libp2p::PeerId;
+use sc_network::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
 use std::collections::{HashMap, HashSet};
 use std::sync::{RwLock, Arc};
@@ -23,8 +23,8 @@ use std::time::SystemTime;
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, PartyType,
-            poll_for_broadcasts_ch, poll_for_p2p_ch, broadcast_ch, sendp2p_ch, get_party_num,
-            TssResult, MissionParam };
+            get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
+            TssResult, MissionParam, ErrorResult };
 
 impl From<Params> for Parameters {
     fn from(item: Params) -> Self {
@@ -40,9 +40,10 @@ pub async fn gg20_keygen_client (
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
     mission_params: MissionParam,
-) -> Result<TssResult, ErrorType> {
+) -> Result<TssResult, ErrorResult> {
     let totaltime = SystemTime::now();
     let MissionParam {
+        start_time,
         index,
         store,
         n,
@@ -61,7 +62,7 @@ pub async fn gg20_keygen_client (
     let delay = time::Duration::from_millis(25);
 
     // tell other node the local_peer_id
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "keygen_notify",
@@ -87,7 +88,7 @@ pub async fn gg20_keygen_client (
     let res_stage1: KeyGenStage1Result = keygen_stage1(&input_stage1);
 
     // broadcast test
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round1",
@@ -95,21 +96,25 @@ pub async fn gg20_keygen_client (
         serde_json::to_string(&res_stage1.bc_com1_l).unwrap(),
         PartyType::Chat
     );
-    let round1_ans_vec = poll_for_broadcasts_ch(
+    let round1_ans_vec = if let Ok(round1_ans_vec) = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
         delay,
         "round1",
         index,
-    );
+        start_time
+    ) { round1_ans_vec } else {
+        // TODO: run timeout handle func
+        return Err(ErrorResult::Timeout(10));
+    };
     let mut bc1_vec = round1_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenBroadcastMessage1>(m).unwrap())
         .collect::<Vec<_>>();
 
     bc1_vec.insert(party_num_int as usize - 1, res_stage1.bc_com1_l);
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round2",
@@ -117,14 +122,18 @@ pub async fn gg20_keygen_client (
         serde_json::to_string(&res_stage1.decom1_l).unwrap(),
         PartyType::Chat
     );
-    let round2_ans_vec = poll_for_broadcasts_ch(
+    let round2_ans_vec = if let Ok(round2_ans_vec) = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
         delay,
         "round2",
         index,
-    );
+        start_time
+    ) { round2_ans_vec } else {
+            // TODO: run timeout handle func
+        return Err(ErrorResult::Timeout(10));
+    };
     let mut decom1_vec = round2_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenDecommitMessage1>(m).unwrap())
@@ -167,7 +176,7 @@ pub async fn gg20_keygen_client (
             // This client does not implement the identifiable abort protocol.
             // If it were these secret shares would need to be broadcasted to indetify the
             // malicious party.
-            sendp2p_ch(
+            sendp2p_data(
                 tx.clone(),
                 party_num_int,
                 i,
@@ -180,14 +189,18 @@ pub async fn gg20_keygen_client (
         }
     }
     // get shares from other parties.
-    let round3_ans_vec = poll_for_p2p_ch(
+    let round3_ans_vec = if let Ok(round3_ans_vec) = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
         delay,
         "round3",
         index,
-    );
+        start_time
+    ) { round3_ans_vec } else {
+        // TODO: run timeout handle func
+        return Err(ErrorResult::Timeout(10));
+    };
     // decrypt shares from other parties.
     let mut j = 0;
     let mut party_shares: Vec<FE> = Vec::new();
@@ -205,7 +218,7 @@ pub async fn gg20_keygen_client (
             j += 1;
         }
     }
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round4",
@@ -215,14 +228,18 @@ pub async fn gg20_keygen_client (
     );
 
     //get vss_scheme for others.
-    let round4_ans_vec = poll_for_broadcasts_ch(
+    let round4_ans_vec = if let Ok(round4_ans_vec) = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
         delay,
         "round4",
         index,
-    );
+        start_time
+    ) { round4_ans_vec } else {
+        // TODO: run timeout handle func
+        return Err(ErrorResult::Timeout(10));
+    };
 
     let mut j = 0;
     let mut vss_scheme_vec: Vec<VerifiableSS> = Vec::new();
@@ -246,7 +263,7 @@ pub async fn gg20_keygen_client (
     };
     let res_stage3 = keygen_stage3(&input_stage3).expect("stage 3 keygen failed.");
     // round 5: send dlog proof
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round5",
@@ -255,14 +272,18 @@ pub async fn gg20_keygen_client (
         PartyType::Chat
     );
 
-    let round5_ans_vec = poll_for_broadcasts_ch(
+    let round5_ans_vec = if let Ok(round5_ans_vec) = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
         delay,
         "round5",
         index,
-    );
+        start_time
+    ) { round5_ans_vec } else {
+        // TODO: run timeout handle func
+        return Err(ErrorResult::Timeout(10));
+    };
     let mut j = 0;
     let mut dlog_proof_vec: Vec<DLogProof> = Vec::new();
     for i in 1..=params.share_count {
@@ -306,7 +327,7 @@ pub async fn gg20_keygen_client (
 
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    info!(target: "afg", "keygen time is: {:?} ***********************", difference);
+    info!(target: "afg", "keygen completed in: {:?} seconds", difference);
 
     // TODO: should result the result to the chain
     Ok(TssResult::KeygenResult())

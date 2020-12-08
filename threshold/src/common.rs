@@ -1,4 +1,4 @@
-use std::{iter::repeat, thread, time::Duration};
+use std::{iter::repeat, thread, time::{SystemTime, Duration}};
 
 use crypto::{
     aead::{AeadDecryptor, AeadEncryptor},
@@ -23,6 +23,8 @@ pub type Key = String;
 #[allow(dead_code)]
 pub const AES_KEY_BYTES_LEN: usize = 32;
 
+pub const TIME_LIMIT: Duration = Duration::from_secs(10);
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct AEAD {
     pub ciphertext: Vec<u8>,
@@ -37,6 +39,7 @@ pub enum GossipMessage {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct MissionParam {
+    pub start_time: SystemTime,
     pub index: u64,
     pub store: Vec<u8>,
     pub n: u16,
@@ -57,10 +60,10 @@ pub enum TssResult {
     SignResult()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ErrorMessage {
-    NetError,
-    DataError(ErrorType)
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub enum ErrorResult {
+    Timeout(u64),
+    ComError(ErrorType)
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -100,7 +103,7 @@ pub fn aes_decrypt(key: &[u8], aead_pack: AEAD) -> Vec<u8> {
 }
 
 #[allow(dead_code)]
-pub fn broadcast_ch(
+pub fn broadcast_data(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     party_num_int: u16,
     round: &str,
@@ -123,7 +126,7 @@ pub fn broadcast_ch(
 }
 
 #[allow(dead_code)]
-pub fn sendp2p_ch(
+pub fn sendp2p_data(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     party_from: u16,
     party_to: u16,
@@ -146,20 +149,24 @@ pub fn sendp2p_ch(
     assert!(tx.lock().unbounded_send(data).is_ok());
 }
 #[allow(dead_code)]
-pub fn poll_for_broadcasts_ch(
+pub fn get_data_broadcasted(
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     party_num: u16,
     n: u16,
     delay: Duration,
     round: &str,
     index: u64,
-) -> Vec<String> {
+    start_time: SystemTime
+) -> Result<Vec<String>, ()> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
             let key = format!("{}-{}-{}", i, round, index);
             loop {
                 {
+                    if time_check_out(start_time, TIME_LIMIT) {
+                        return Err(());
+                    }
                     let db = db_mtx.read().unwrap();
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
@@ -172,23 +179,27 @@ pub fn poll_for_broadcasts_ch(
             }
         }
     }
-    ans_vec
+    Ok(ans_vec)
 }
 #[allow(dead_code)]
-pub fn poll_for_p2p_ch(
+pub fn get_data_p2p(
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     party_num: u16,
     n: u16,
     delay: Duration,
     round: &str,
     index: u64,
-) -> Vec<String> {
+    start_time: SystemTime
+) -> Result<Vec<String>, ()> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
             let key = format!("{}-{}-{}-{}", i, party_num, round, index);
             loop {
                 {
+                    if time_check_out(start_time, TIME_LIMIT) {
+                        return Err(());
+                    }
                     let db = db_mtx.read().unwrap();
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
@@ -201,7 +212,7 @@ pub fn poll_for_p2p_ch(
             }
         }
     }
-    ans_vec
+    Ok(ans_vec)
 }
 
 #[allow(dead_code)]
@@ -265,4 +276,9 @@ fn vecu8_equal(v1: &Vec<u8>, v2: &Vec<u8>) -> bool {
         if v1[i] != v2[i] { return false; }
     }
     true
+}
+
+fn time_check_out(start_time: SystemTime, time_limit: Duration) -> bool {
+    if start_time.elapsed().unwrap() >= time_limit { return true; }
+    false
 }

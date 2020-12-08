@@ -12,10 +12,9 @@ use sc_network::PeerId;
 use sc_network_gossip::GossipEngine;
 use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnboundedSender};
 use parking_lot::Mutex;
-use async_std;
 use std::collections::{HashSet, HashMap};
 use std::sync::{RwLock, Arc};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
@@ -126,49 +125,38 @@ impl<B: BlockT> Worker<B> {
         match command {
             // run missions
             WorkerCommand::Keygen(index, store, n, t) => {
-                use async_std::future;
-                let time = Duration::from_secs(10);
+                let start_time = SystemTime::now();
                 let local_peer_id = self.local_peer_id.clone();
-                let mission_param = MissionParam {
-                    index,
-                    store,
-                    n,
-                    t,
-                    local_peer_id
-                };
+                let mission_param = MissionParam { start_time, index, store, n, t, local_peer_id };
 
-                let mission = async_std::task::spawn(gg20_keygen_client(
+                async_std::task::spawn(
+                    gg20_keygen_client(
                         self.low_sender.clone(),
                         self.db_mtx.clone(),
                         self.id_list.clone(),
                         mission_param
-                    ));
-                // TODO: return the result to chain
-                let _res = future::timeout(time, mission).map_err(|e|{
-                    info!(target: "afg", "mission timeout: {:?}****************", e);
-                });
+                    ).map_err(|e|{
+                        // TODO: return the result to chain
+                        info!(target: "afg", "keygen mission timeout: {:?}****************", e);
+                    })
+                );
             },
             WorkerCommand::Sign(index, store, n, t) => {
-                use async_std::future;
-                let time = Duration::from_secs(10);
+                let start_time = SystemTime::now();
                 let local_peer_id = self.local_peer_id.clone();
-                let mission_param = MissionParam {
-                    index,
-                    store,
-                    n,
-                    t,
-                    local_peer_id
-                };
-                let mission = async_std::task::spawn(gg20_sign_client(
-                    self.low_sender.clone(),
-                    self.db_mtx.clone(),
-                    self.id_list.clone(),
-                    mission_param
-                ));
-                // TODO: return the result to chain
-                let _res = future::timeout(time, mission).map_err(|e|{
-                    info!(target: "afg", "mission timeout: {:?} ****************", e);
-                });
+                let mission_param = MissionParam { start_time, index, store, n, t, local_peer_id };
+
+                async_std::task::spawn(
+                    gg20_sign_client(
+                        self.low_sender.clone(),
+                        self.db_mtx.clone(),
+                        self.id_list.clone(),
+                        mission_param
+                    ).map_err(|e|{
+                        // TODO: return the result to chain
+                        info!(target: "afg", "keysign mission timeout: {:?}****************", e);
+                    })
+                );
             },
         }
     }
