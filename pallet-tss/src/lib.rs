@@ -32,9 +32,9 @@ decl_module! {
         }
 
          #[weight = 0]
-        fn sign_mission(origin, store:Vec<u8>, n: u16, t: u16) -> DispatchResult{
+        fn sign_mission(origin, store:Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) -> DispatchResult{
             let _sender = ensure_root(origin)?;
-            Self::sign(store, n, t)
+            Self::sign(store, n, t, message_str)
         }
     }
 }
@@ -47,8 +47,8 @@ decl_event!(
     {
         /// (index, store, n, t, time)
         GenKey(u64, Vec<u8>, u16, u16, Time),
-        /// (index, store, n, t, time)
-        Sign(u64, Vec<u8>, u16, u16, Time),
+        /// (index, store, n, t, message_str, time)
+        Sign(u64, Vec<u8>, u16, u16, Vec<u8>, Time),
     }
 );
 
@@ -67,11 +67,10 @@ impl<T: Trait> Module<T> {
         Ok(())
     }
 
-    pub fn sign(store:Vec<u8>, n: u16, t: u16) -> DispatchResult{
+    pub fn sign(store:Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) -> DispatchResult{
         let index = Self::tss_index();
         let time = <timestamp::Module<T>>::get();
-        Self::deposit_event(RawEvent::Sign(index, store, n, t, time));
+        Self::deposit_event(RawEvent::Sign(index, store, n, t, message_str, time));
         Ok(())
     }
 }
-

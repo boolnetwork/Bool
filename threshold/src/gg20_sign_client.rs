@@ -19,17 +19,13 @@ use zk_paillier::zkproofs::DLogStatement;
 use sc_network::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
 use std::collections::{HashMap, HashSet};
-// use std::collections::hash_map::DefaultHasher;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::{SystemTime};
-// use std::hash::{Hash as Orhash, Hasher};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
-use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, PartyType,
+use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
              get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-             TssResult, MissionParam, ErrorResult };
-use crate::common::AES_KEY_BYTES_LEN;
+             TssResult, MissionParam, ErrorResult, ErrorType };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParamsFile {
@@ -60,7 +56,8 @@ pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
-    mission_params: MissionParam,
+    message_str: String,
+    mission_params: MissionParam
 ) -> Result<TssResult, ErrorResult> {
     let totaltime = SystemTime::now();
     let MissionParam {
@@ -72,7 +69,6 @@ pub async fn gg20_sign_client(
         local_peer_id
     } = mission_params;
 
-    let message_str = "KZen Network".to_string();
     let message = match hex::decode(message_str.clone()) {
         Ok(x) => x,
         Err(_e) => message_str.as_bytes().to_vec(),
@@ -81,14 +77,14 @@ pub async fn gg20_sign_client(
     // delay:
     let delay = time::Duration::from_millis(25);
     // read key file
-    let data = fs::read_to_string("key.store")
+    let data = fs::read_to_string(String::from_utf8_lossy(&store).into_owned())
         .expect("Unable to load keys, did you run keygen first? ");
     let keypair: PartyKeyPair = serde_json::from_str(&data).unwrap();
 
     //read parameters:
     let params: Params = Params {
-        parties: t.to_string(),
-        threshold: n.to_string(),
+        parties: n.to_string(),
+        threshold: t.to_string(),
     };
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
@@ -101,7 +97,7 @@ pub async fn gg20_sign_client(
         "sign_notify",
         index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        PartyType::Notify
+        GossipType::Notify
     );
 
     // get party_num_int
@@ -123,9 +119,10 @@ pub async fn gg20_sign_client(
         "round0",
         index,
         serde_json::to_string(&keypair.party_num_int_s).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round0_ans_vec = if let Ok(round0_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -133,9 +130,9 @@ pub async fn gg20_sign_client(
         "round0",
         index,
         start_time
-    ) { round0_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round0_ans_vec = if let Ok(round0_ans_vec) = poll_result { round0_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
     let mut j = 0;
@@ -171,9 +168,10 @@ pub async fn gg20_sign_client(
             res_stage1.sign_keys.g_w_i
         ))
         .unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round1_ans_vec = if let Ok(round1_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -181,9 +179,9 @@ pub async fn gg20_sign_client(
         "round1",
         index,
         start_time
-    ) { round1_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
     let mut j = 0;
@@ -259,13 +257,13 @@ pub async fn gg20_sign_client(
                     ni_enc,
                 ))
                 .unwrap(),
-                PartyType::Chat
+                GossipType::Chat
             );
             j += 1;
         }
     }
 
-    let round2_ans_vec = if let Ok(round2_ans_vec) = get_data_p2p(
+    let poll_result = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -273,9 +271,9 @@ pub async fn gg20_sign_client(
         "round2",
         index,
         start_time
-    ) { round2_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
     let mut m_b_gamma_rec_vec: Vec<MessageB> = Vec::new();
@@ -330,13 +328,13 @@ pub async fn gg20_sign_client(
                 "round3",
                 index,
                 serde_json::to_string(&(alpha_enc, miu_enc)).unwrap(),
-                PartyType::Chat
+                GossipType::Chat
             );
             j += 1;
         }
     }
 
-    let round3_ans_vec = if let Ok(round3_ans_vec) = get_data_p2p(
+    let poll_result = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -344,10 +342,11 @@ pub async fn gg20_sign_client(
         "round3",
         index,
         start_time
-    ) { round3_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round3_ans_vec = if let Ok(round3_ans_vec) = poll_result { round3_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut alpha_vec = vec![];
     let mut miu_vec = vec![];
     for i in 0..THRESHOLD {
@@ -377,9 +376,10 @@ pub async fn gg20_sign_client(
         "round4",
         index,
         serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i,)).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round4_ans_vec = if let Ok(round4_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -387,10 +387,11 @@ pub async fn gg20_sign_client(
         "round4",
         index,
         start_time
-    ) { round4_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut delta_i_vec = vec![];
     let mut decom1_vec = vec![];
     let mut j = 0;
@@ -424,9 +425,10 @@ pub async fn gg20_sign_client(
         "round5",
         index,
         serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(),)).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round5_ans_vec = if let Ok(round5_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -434,10 +436,11 @@ pub async fn gg20_sign_client(
         "round5",
         index,
         start_time
-    ) { round5_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut R_vec = vec![];
     let mut R_dash_vec = vec![];
     let mut j = 0;
@@ -471,15 +474,16 @@ pub async fn gg20_sign_client(
         message_bn: message_bn.clone(),
     };
     let res_stage6 = sign_stage6(&input_stage6).expect("stage6 sign failed.");
+
     broadcast_data(
         tx.clone(),
         party_num_int,
         "round6",
         index,
         serde_json::to_string(&res_stage6.local_sig.clone()).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round6_ans_vec = if let Ok(round6_ans_vec) = get_data_broadcasted(
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
@@ -487,10 +491,11 @@ pub async fn gg20_sign_client(
         "round6",
         index,
         start_time
-    ) { round6_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result { round6_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut local_sig_vec = vec![];
     let mut j = 0;
     for i in 1..THRESHOLD + 2 {
@@ -524,11 +529,10 @@ pub async fn gg20_sign_client(
     ))
     .unwrap();
 
-    fs::write(String::from_utf8_lossy(&store).into_owned(), sign_json).expect("Unable to save !");
+    fs::write("sign.store", sign_json.clone()).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "sign completed in: {:?} seconds", difference);
 
-    // TODO: should send the result to the chain
-    Ok(TssResult::SignResult())
+    Ok(TssResult::SignResult(sign_json))
 }

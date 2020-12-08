@@ -20,11 +20,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::SystemTime;
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
-use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, PartyType,
+use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
             get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-            TssResult, MissionParam, ErrorResult };
+            TssResult, MissionParam, ErrorResult, ErrorType };
 
 impl From<Params> for Parameters {
     fn from(item: Params) -> Self {
@@ -68,7 +67,7 @@ pub async fn gg20_keygen_client (
         "keygen_notify",
         index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        PartyType::Notify
+        GossipType::Notify
     );
     // get party_num_int
     loop{
@@ -94,9 +93,10 @@ pub async fn gg20_keygen_client (
         "round1",
         index,
         serde_json::to_string(&res_stage1.bc_com1_l).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round1_ans_vec = if let Ok(round1_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
@@ -104,10 +104,11 @@ pub async fn gg20_keygen_client (
         "round1",
         index,
         start_time
-    ) { round1_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut bc1_vec = round1_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenBroadcastMessage1>(m).unwrap())
@@ -120,9 +121,10 @@ pub async fn gg20_keygen_client (
         "round2",
         index,
         serde_json::to_string(&res_stage1.decom1_l).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round2_ans_vec = if let Ok(round2_ans_vec) = get_data_broadcasted(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
@@ -130,10 +132,11 @@ pub async fn gg20_keygen_client (
         "round2",
         index,
         start_time
-    ) { round2_ans_vec } else {
-            // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     let mut decom1_vec = round2_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenDecommitMessage1>(m).unwrap())
@@ -183,13 +186,13 @@ pub async fn gg20_keygen_client (
                 "round3",
                 index,
                 serde_json::to_string(&aead_pack_i).unwrap(),
-                PartyType::Chat
+                GossipType::Chat
             );
             j += 1;
         }
     }
     // get shares from other parties.
-    let round3_ans_vec = if let Ok(round3_ans_vec) = get_data_p2p(
+    let poll_result = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
@@ -197,10 +200,11 @@ pub async fn gg20_keygen_client (
         "round3",
         index,
         start_time
-    ) { round3_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round3_ans_vec = if let Ok(round3_ans_vec) =  poll_result { round3_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
+
     // decrypt shares from other parties.
     let mut j = 0;
     let mut party_shares: Vec<FE> = Vec::new();
@@ -224,11 +228,11 @@ pub async fn gg20_keygen_client (
         "round4",
         index,
         serde_json::to_string(&res_stage2.vss_scheme_s).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
 
     //get vss_scheme for others.
-    let round4_ans_vec = if let Ok(round4_ans_vec) = get_data_broadcasted(
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
@@ -236,9 +240,9 @@ pub async fn gg20_keygen_client (
         "round4",
         index,
         start_time
-    ) { round4_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
     let mut j = 0;
@@ -269,10 +273,10 @@ pub async fn gg20_keygen_client (
         "round5",
         index,
         serde_json::to_string(&res_stage3.dlog_proof_s).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
 
-    let round5_ans_vec = if let Ok(round5_ans_vec) = get_data_broadcasted(
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         params.share_count,
@@ -280,10 +284,11 @@ pub async fn gg20_keygen_client (
         "round5",
         index,
         start_time
-    ) { round5_ans_vec } else {
-        // TODO: run timeout handle func
-        return Err(ErrorResult::Timeout(10));
+    );
+    let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()))
     };
+
     let mut j = 0;
     let mut dlog_proof_vec: Vec<DLogProof> = Vec::new();
     for i in 1..=params.share_count {
@@ -329,8 +334,7 @@ pub async fn gg20_keygen_client (
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "keygen completed in: {:?} seconds", difference);
 
-    // TODO: should result the result to the chain
-    Ok(TssResult::KeygenResult())
+    Ok(TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap()))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartyKeyPair {

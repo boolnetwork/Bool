@@ -137,24 +137,25 @@ impl<B: BlockT> Worker<B> {
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "keygen mission timeout: {:?}****************", e);
+                        info!(target: "afg", "keygen mission timeout: {:?}", e);
                     })
                 );
             },
-            WorkerCommand::Sign(index, store, n, t) => {
+            WorkerCommand::Sign(index, store, n, t, message_str) => {
                 let start_time = SystemTime::now();
                 let local_peer_id = self.local_peer_id.clone();
                 let mission_param = MissionParam { start_time, index, store, n, t, local_peer_id };
-
+                let message_str = String::from_utf8_lossy(&message_str).into_owned();
                 async_std::task::spawn(
                     gg20_sign_client(
                         self.low_sender.clone(),
                         self.db_mtx.clone(),
                         self.id_list.clone(),
+                        message_str,
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "keysign mission timeout: {:?}****************", e);
+                        info!(target: "afg", "sign mission timeout: {:?}", e);
                     })
                 );
             },

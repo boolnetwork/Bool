@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 use sp_utils::mpsc::{TracingUnboundedSender};
 
 pub type Key = String;
@@ -48,7 +47,7 @@ pub struct MissionParam {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum PartyType {
+pub enum GossipType {
     Chat,
     Notify,
 }
@@ -56,13 +55,13 @@ pub enum PartyType {
 // TODO: need more details
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum TssResult {
-    KeygenResult(),
-    SignResult()
+    KeygenResult(String),
+    SignResult(String)
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ErrorResult {
-    Timeout(u64),
+    Timeout(ErrorType),
     ComError(ErrorType)
 }
 
@@ -76,6 +75,37 @@ pub struct Entry {
 pub struct Params {
     pub parties: String,
     pub threshold: String,
+}
+
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ErrorType {
+    error_type: String,
+    bad_actors: Vec<usize>,
+}
+
+impl ErrorType {
+    pub fn new(error_type: String, bad_actors: Vec<usize>) -> Self {
+        ErrorType {
+            error_type,
+            bad_actors
+        }
+    }
+
+    pub fn error_type(&self) -> String {
+        self.error_type.clone()
+    }
+
+    pub fn bad_actors(&self) -> Vec<usize> {
+        self.bad_actors.clone()
+    }
+
+    pub fn set_error_type(&mut self, error_type: String) {
+        self.error_type = error_type;
+    }
+
+    pub fn set_bad_actores(&mut self, bad_actors: Vec<usize>) {
+        self.bad_actors = bad_actors;
+    }
 }
 
 #[allow(dead_code)]
@@ -109,7 +139,7 @@ pub fn broadcast_data(
     round: &str,
     index: u64,
     data: String,
-    ty: PartyType
+    ty: GossipType
 ) {
     let key = format!("{}-{}-{}", party_num_int, round, index);
     let entry: Entry = Entry{
@@ -118,8 +148,8 @@ pub fn broadcast_data(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::Notify => GossipMessage::Notify(data),
-        PartyType::Chat => GossipMessage::Chat(data),
+        GossipType::Notify => GossipMessage::Notify(data),
+        GossipType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());
@@ -133,7 +163,7 @@ pub fn sendp2p_data(
     round: &str,
     index: u64,
     data: String,
-    ty: PartyType
+    ty: GossipType
 ) {
     let key = format!("{}-{}-{}-{}", party_from, party_to, round, index);
     let entry: Entry = Entry{
@@ -142,8 +172,8 @@ pub fn sendp2p_data(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        PartyType::Notify => GossipMessage::Notify(data),
-        PartyType::Chat => GossipMessage::Chat(data),
+        GossipType::Notify => GossipMessage::Notify(data),
+        GossipType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
     assert!(tx.lock().unbounded_send(data).is_ok());
@@ -157,17 +187,26 @@ pub fn get_data_broadcasted(
     round: &str,
     index: u64,
     start_time: SystemTime
-) -> Result<Vec<String>, ()> {
+) -> Result<Vec<String>, ErrorType> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
             let key = format!("{}-{}-{}", i, round, index);
             loop {
                 {
-                    if time_check_out(start_time, TIME_LIMIT) {
-                        return Err(());
-                    }
                     let db = db_mtx.read().unwrap();
+                    // timeout handle
+                    if time_check_out(start_time, TIME_LIMIT) {
+                        let mut err_res: Vec<usize> = Vec::new();
+                        for i in 1..=n {
+                            if i != party_num {
+                                let key = format!("{}-{}-{}", i, round, index);
+                                if let None = db.get(&key) { err_res.push(i.into()); }
+                            }
+                        }
+                        return Err(ErrorType::new(String::from("timeout"), err_res));
+                    }
+                    // normal handle
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
                         ans_vec.push(da);
@@ -190,17 +229,26 @@ pub fn get_data_p2p(
     round: &str,
     index: u64,
     start_time: SystemTime
-) -> Result<Vec<String>, ()> {
+) -> Result<Vec<String>, ErrorType> {
     let mut ans_vec: Vec<String> = Vec::new();
     for i in 1..=n {
         if i != party_num {
             let key = format!("{}-{}-{}-{}", i, party_num, round, index);
             loop {
                 {
-                    if time_check_out(start_time, TIME_LIMIT) {
-                        return Err(());
-                    }
                     let db = db_mtx.read().unwrap();
+                    // timeout handle
+                    if time_check_out(start_time, TIME_LIMIT) {
+                        let mut err_res: Vec<usize> = Vec::new();
+                        for i in 1..=n {
+                            if i != party_num {
+                                let key = format!("{}-{}-{}-{}", i, party_num, round, index);
+                                if let None = db.get(&key) { err_res.push(i.into()); }
+                            }
+                        }
+                        return Err(ErrorType::new(String::from("timeout"), err_res));
+                    }
+                    // normal handle
                     if let Some(data) = db.get(&key) {
                         let da: String = (*data).clone().to_string();
                         ans_vec.push(da);
