@@ -200,12 +200,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "assert_matches"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "695579f0f2520f3774bb40461e5adb066459d4e0af4d59d20175484fb8e9edf1"
-
-[[package]]
 name = "async-channel"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7986,17 +7980,13 @@ dependencies = [
 name = "threshold"
 version = "0.0.1"
 dependencies = [
- "assert_matches",
  "async-std",
  "bool-primitives",
  "bool-runtime",
  "curv 0.2.6",
- "derive_more",
  "frame-system",
  "futures 0.3.8",
- "futures-timer 3.0.2",
  "hex 0.4.2",
- "libp2p",
  "libsecp256k1",
  "log",
  "multi-party-ecdsa",
@@ -8004,7 +7994,6 @@ dependencies = [
  "pallet-tss",
  "parity-scale-codec",
  "parking_lot 0.10.2",
- "rand 0.7.3",
  "reqwest",
  "rust-crypto",
  "sc-block-builder",

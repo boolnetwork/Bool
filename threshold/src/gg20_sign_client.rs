@@ -16,20 +16,16 @@ use serde::{Deserialize, Serialize};
 use std::{fs, time};
 use zk_paillier::zkproofs::DLogStatement;
 
-use libp2p::{identity, PeerId};
+use sc_network::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
 use std::collections::{HashMap, HashSet};
-// use std::collections::hash_map::DefaultHasher;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::{SystemTime};
-// use std::hash::{Hash as Orhash, Hasher};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
-use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, PartyType,
-             poll_for_broadcasts_ch, poll_for_p2p_ch, broadcast_ch, sendp2p_ch, get_party_num,
-             TssResult, MissionParam };
-use crate::common::AES_KEY_BYTES_LEN;
+use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
+             get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
+             TssResult, MissionParam, ErrorResult, ErrorType };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParamsFile {
@@ -56,21 +52,23 @@ pub struct PartyKeyPair {
     pub h1_h2_N_tilde_vec_s: Vec<DLogStatement>,
 }
 
-// #[allow(clippy::cognitive_complexity)]
 pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
-    mission_params: MissionParam,
-) -> Result<TssResult, ErrorType> {
+    message_str: String,
+    mission_params: MissionParam
+) -> Result<TssResult, ErrorResult> {
     let totaltime = SystemTime::now();
     let MissionParam {
+        start_time,
         index,
         store,
         n,
-        t
+        t,
+        local_peer_id
     } = mission_params;
-    let message_str = "KZen Network".to_string();
+
     let message = match hex::decode(message_str.clone()) {
         Ok(x) => x,
         Err(_e) => message_str.as_bytes().to_vec(),
@@ -79,30 +77,27 @@ pub async fn gg20_sign_client(
     // delay:
     let delay = time::Duration::from_millis(25);
     // read key file
-    let data = fs::read_to_string("key.store")
+    let data = fs::read_to_string(String::from_utf8_lossy(&store).into_owned())
         .expect("Unable to load keys, did you run keygen first? ");
     let keypair: PartyKeyPair = serde_json::from_str(&data).unwrap();
 
     //read parameters:
     let params: Params = Params {
-        parties: t.to_string(),
-        threshold: n.to_string(),
+        parties: n.to_string(),
+        threshold: t.to_string(),
     };
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
     let mut party_num_int: u16 = 0;
 
-    let local_key = identity::Keypair::generate_ed25519();
-    let local_peer_id: PeerId = PeerId::from(local_key.public());
-
     // tell other node the local_peer_id
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "sign_notify",
         index,
         serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        PartyType::Notify
+        GossipType::Notify
     );
 
     // get party_num_int
@@ -118,22 +113,27 @@ pub async fn gg20_sign_client(
     }
 
     // round 0: collect signers IDs
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round0",
         index,
         serde_json::to_string(&keypair.party_num_int_s).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round0_ans_vec = poll_for_broadcasts_ch(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round0",
         index,
+        start_time
     );
+    let round0_ans_vec = if let Ok(round0_ans_vec) = poll_result { round0_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
 
     let mut j = 0;
     //0 indexed vec containing ids of the signing parties.
@@ -157,7 +157,7 @@ pub async fn gg20_sign_client(
     };
     let res_stage1 = sign_stage1(&input_stage1);
     // publish message A  and Commitment and then gather responses from other parties.
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round1",
@@ -168,16 +168,21 @@ pub async fn gg20_sign_client(
             res_stage1.sign_keys.g_w_i
         ))
         .unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round1_ans_vec = poll_for_broadcasts_ch(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round1",
         index,
+        start_time
     );
+    let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
 
     let mut j = 0;
     let mut bc1_vec: Vec<SignBroadcastPhase1> = Vec::new();
@@ -239,7 +244,7 @@ pub async fn gg20_sign_client(
                 &BigInt::to_vec(&res_stage2.w_i_vec[j].1.to_big_int()),
             );
 
-            sendp2p_ch(
+            sendp2p_data(
                 tx.clone(),
                 party_num_int,
                 i,
@@ -252,20 +257,24 @@ pub async fn gg20_sign_client(
                     ni_enc,
                 ))
                 .unwrap(),
-                PartyType::Chat
+                GossipType::Chat
             );
             j += 1;
         }
     }
 
-    let round2_ans_vec = poll_for_p2p_ch(
+    let poll_result = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round2",
         index,
+        start_time
     );
+    let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
 
     let mut m_b_gamma_rec_vec: Vec<MessageB> = Vec::new();
     let mut m_b_w_rec_vec: Vec<MessageB> = Vec::new();
@@ -312,27 +321,32 @@ pub async fn gg20_sign_client(
                 &BigInt::to_vec(&res_stage3.alpha_vec_w[j].to_big_int()),
             );
 
-            sendp2p_ch(
+            sendp2p_data(
                 tx.clone(),
                 party_num_int,
                 i,
                 "round3",
                 index,
                 serde_json::to_string(&(alpha_enc, miu_enc)).unwrap(),
-                PartyType::Chat
+                GossipType::Chat
             );
             j += 1;
         }
     }
 
-    let round3_ans_vec = poll_for_p2p_ch(
+    let poll_result = get_data_p2p(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round3",
         index,
+        start_time
     );
+    let round3_ans_vec = if let Ok(round3_ans_vec) = poll_result { round3_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
+
     let mut alpha_vec = vec![];
     let mut miu_vec = vec![];
     for i in 0..THRESHOLD {
@@ -356,22 +370,28 @@ pub async fn gg20_sign_client(
     };
     let res_stage4 = sign_stage4(&input_stage4).expect("Sign Stage4 failed.");
     //broadcast decommitment from stage1 and delta_i
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round4",
         index,
         serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i,)).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round4_ans_vec = poll_for_broadcasts_ch(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round4",
         index,
+        start_time
     );
+    let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
+
     let mut delta_i_vec = vec![];
     let mut decom1_vec = vec![];
     let mut j = 0;
@@ -399,22 +419,28 @@ pub async fn gg20_sign_client(
         s_ttag: signers_vec.len(),
     };
     let res_stage5 = sign_stage5(&input_stage5).expect("Sign Stage 5 failed.");
-    broadcast_ch(
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round5",
         index,
         serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(),)).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round5_ans_vec = poll_for_broadcasts_ch(
+
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round5",
         index,
+        start_time
     );
+    let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
+
     let mut R_vec = vec![];
     let mut R_dash_vec = vec![];
     let mut j = 0;
@@ -448,22 +474,28 @@ pub async fn gg20_sign_client(
         message_bn: message_bn.clone(),
     };
     let res_stage6 = sign_stage6(&input_stage6).expect("stage6 sign failed.");
-    broadcast_ch(
+
+    broadcast_data(
         tx.clone(),
         party_num_int,
         "round6",
         index,
         serde_json::to_string(&res_stage6.local_sig.clone()).unwrap(),
-        PartyType::Chat
+        GossipType::Chat
     );
-    let round6_ans_vec = poll_for_broadcasts_ch(
+    let poll_result = get_data_broadcasted(
         db_mtx.clone(),
         party_num_int,
         THRESHOLD + 1,
         delay,
         "round6",
         index,
+        start_time
     );
+    let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result { round6_ans_vec } else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
+
     let mut local_sig_vec = vec![];
     let mut j = 0;
     for i in 1..THRESHOLD + 2 {
@@ -497,14 +529,10 @@ pub async fn gg20_sign_client(
     ))
     .unwrap();
 
-    fs::write(String::from_utf8_lossy(&store).into_owned(), sign_json).expect("Unable to save !");
+    fs::write("sign.store", sign_json.clone()).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    // println!("total time: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
-    info!(target: "afg", "sign time is: {:?}", difference);
-    info!(target: "afg", "----------------------------------------------------------------");
+    info!(target: "afg", "sign completed in: {:?} seconds", difference);
 
-    // TODO: should send the result to the chain
-    Ok(TssResult::SignResult())
+    Ok(TssResult::SignResult(sign_json))
 }

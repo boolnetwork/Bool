@@ -4,12 +4,10 @@ use futures::prelude::*;
 use parking_lot::Mutex;
 use std::{pin::Pin, sync::Arc, task::{Context, Poll}};
 use sp_blockchain::{Error as ClientError};
-use sc_network::{NetworkService};
+use sc_network::{PeerId, NetworkService};
 use sc_network_gossip::{GossipEngine, Network as GossipNetwork};
-// use parity_scale_codec::{Encode, Decode};
-use sp_runtime::traits::{Block as BlockT, NumberFor};
+use sp_runtime::traits::Block as BlockT;
 use sp_runtime::ConsensusEngineId;
-// use sc_telemetry::{telemetry, CONSENSUS_DEBUG, CONSENSUS_INFO};
 use sp_utils::mpsc::{TracingUnboundedReceiver};
 
 use crate::gossip::{GossipValidator, PeerReport};
@@ -18,21 +16,16 @@ pub const TSS_ENGINE_ID: ConsensusEngineId = *b"LLTP";
 pub const TSS_PROTOCOL_NAME: &'static str = "/abmatrix/multi-party-tss/1";
 
 pub trait Network<Block: BlockT>: GossipNetwork<Block> + Clone + Send + 'static {
-    /// Notifies the sync service to try and sync the given block from the given
-    /// peers.
-    ///
-    /// If the given vector of peers is empty then the underlying implementation
-    /// should make a best effort to fetch the block from any peers it is
-    /// connected to (NOTE: this assumption will change in the future #3629).
-    fn set_sync_fork_request(&self, peers: Vec<sc_network::PeerId>, hash: Block::Hash, number: NumberFor<Block>);
+
+    fn local_id(&self) -> PeerId;
 }
 
 impl<B, H> Network<B> for Arc<NetworkService<B, H>> where
     B: BlockT,
     H: sc_network::ExHashT,
 {
-    fn set_sync_fork_request(&self, peers: Vec<sc_network::PeerId>, hash: B::Hash, number: NumberFor<B>) {
-        NetworkService::set_sync_fork_request(self, peers, hash, number)
+    fn local_id(&self) -> PeerId {
+        self.local_peer_id().clone()
     }
 }
 
@@ -64,17 +57,8 @@ impl<B: BlockT, N: Network<B>> NetworkBridge<B, N> {
         }
     }
 
-    pub fn communication_message() {
-
-    }
-
-    pub(crate) fn set_sync_fork_request(
-        &self,
-        peers: Vec<sc_network::PeerId>,
-        hash: B::Hash,
-        number: NumberFor<B>
-    ) {
-        Network::set_sync_fork_request(&self.service, peers, hash, number)
+    pub fn service(&self) -> &N {
+        &self.service
     }
 }
 

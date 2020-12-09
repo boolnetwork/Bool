@@ -52,7 +52,7 @@ use futures::channel::mpsc;
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
     Keygen(u64, Vec<u8>, u16, u16),
-    Sign(u64, Vec<u8>, u16, u16)
+    Sign(u64, Vec<u8>, u16, u16, Vec<u8>)
 }
 
 pub enum TssRole{
@@ -295,10 +295,10 @@ impl <V,B>TssSender<V,B>
         self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t)).expect("send command failed");
     }
 
-    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16) /*-> Option<Vec<u8>>*/{
+    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) /*-> Option<Vec<u8>>*/{
         // let pubkey = self.spv.tss_pubkey();
         // debug!(target:"keysign", "pubkey {:?}", pubkey);
-        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t)).expect("send command failed");
+        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t, message_str)).expect("send command failed");
     }
 
     fn get_stream(&self, events_key:StorageKey) -> StorageEventStream<B::Hash> {
@@ -333,9 +333,9 @@ impl <V,B>TssSender<V,B>
                                     self.set_counter(*index);
                                 }
                             },
-                            RawEvent::Sign(index, store, n, t, _time) => {
+                            RawEvent::Sign(index, store, n, t, message_str, _time) => {
                                 if *self.mission_counter.lock() != *index {
-                                    self.key_sign(*index, (*store).to_vec(), *n, *t);
+                                    self.key_sign(*index, (*store).to_vec(), *n, *t, (*message_str).to_vec());
                                     self.set_counter(*index);
                                 }
                             },
