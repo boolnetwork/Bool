@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use sp_utils::mpsc::{TracingUnboundedSender};
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 
 pub type Key = String;
 
@@ -77,36 +78,36 @@ pub struct Params {
     pub threshold: String,
 }
 
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-pub struct ErrorType {
-    error_type: String,
-    bad_actors: Vec<usize>,
-}
-
-impl ErrorType {
-    pub fn new(error_type: String, bad_actors: Vec<usize>) -> Self {
-        ErrorType {
-            error_type,
-            bad_actors
-        }
-    }
-
-    pub fn error_type(&self) -> String {
-        self.error_type.clone()
-    }
-
-    pub fn bad_actors(&self) -> Vec<usize> {
-        self.bad_actors.clone()
-    }
-
-    pub fn set_error_type(&mut self, error_type: String) {
-        self.error_type = error_type;
-    }
-
-    pub fn set_bad_actores(&mut self, bad_actors: Vec<usize>) {
-        self.bad_actors = bad_actors;
-    }
-}
+// #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+// pub struct ErrorType {
+//     error_type: String,
+//     bad_actors: Vec<usize>,
+// }
+//
+// impl ErrorType {
+//     pub fn new(error_type: String, bad_actors: Vec<usize>) -> Self {
+//         ErrorType {
+//             error_type,
+//             bad_actors
+//         }
+//     }
+//
+//     pub fn error_type(&self) -> String {
+//         self.error_type.clone()
+//     }
+//
+//     pub fn bad_actors(&self) -> Vec<usize> {
+//         self.bad_actors.clone()
+//     }
+//
+//     pub fn set_error_type(&mut self, error_type: String) {
+//         self.error_type = error_type;
+//     }
+//
+//     pub fn set_bad_actores(&mut self, bad_actors: Vec<usize>) {
+//         self.bad_actors = bad_actors;
+//     }
+// }
 
 #[allow(dead_code)]
 pub fn aes_encrypt(key: &[u8], plaintext: &[u8]) -> AEAD {

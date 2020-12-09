@@ -5,10 +5,11 @@ use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
 use curv::elliptic::curves::traits::*;
 use curv::{FE, GE, BigInt};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::orchestrate::*;
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::orchestrate_blame::*;
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
     KeyGenBroadcastMessage1, KeyGenDecommitMessage1, Keys, Parameters, SharedKeys,
 };
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 use paillier::*;
 use serde::{Deserialize, Serialize};
 use std::{fs, time};
@@ -23,7 +24,7 @@ use std::time::SystemTime;
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
             get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-            TssResult, MissionParam, ErrorResult, ErrorType };
+            TssResult, MissionParam, ErrorResult};
 
 impl From<Params> for Parameters {
     fn from(item: Params) -> Self {
@@ -84,9 +85,11 @@ pub async fn gg20_keygen_client (
     let input_stage1 = KeyGenStage1Input {
         index: (party_num_int - 1) as usize,
     };
+
+    // res_stage1 = { party_key, bc_com1_l, decom1_l, h1_h2_N_tilde_l }
     let res_stage1: KeyGenStage1Result = keygen_stage1(&input_stage1);
 
-    // broadcast test
+    // phase 1: broadcast commmitment KGC_i
     broadcast_data(
         tx.clone(),
         party_num_int,
@@ -109,12 +112,16 @@ pub async fn gg20_keygen_client (
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
+    // public information: the vector contains KGC_i
     let mut bc1_vec = round1_ans_vec
         .iter()
         .map(|m| serde_json::from_str::<KeyGenBroadcastMessage1>(m).unwrap())
         .collect::<Vec<_>>();
 
+    // insert my commitment
     bc1_vec.insert(party_num_int as usize - 1, res_stage1.bc_com1_l);
+
+    // Phase 2: broadcast decommitment KGD_i
     broadcast_data(
         tx.clone(),
         party_num_int,
@@ -142,6 +149,7 @@ pub async fn gg20_keygen_client (
         .map(|m| serde_json::from_str::<KeyGenDecommitMessage1>(m).unwrap())
         .collect::<Vec<_>>();
     decom1_vec.insert(party_num_int as usize - 1, res_stage1.decom1_l);
+
     let input_stage2 = KeyGenStage2Input {
         index: (party_num_int - 1) as usize,
         params_s: params.clone(),
@@ -149,7 +157,19 @@ pub async fn gg20_keygen_client (
         decom1_vec_s: decom1_vec.clone(),
         bc1_vec_s: bc1_vec.clone(),
     };
-    let res_stage2 = keygen_stage2(&input_stage2).expect("keygen stage 2 failed.");
+    // Probable aborts: 1. Paillier cryptosystem key's consistency
+    //                  2. Consistency between Commitment KGC_i and Decommitment KGD_i
+    //                  3. Composite discrete log proof validity
+    // Doing Feldman-VSS of u_i => { secret share of u_i, corresponding vss-scheme to verify the secret share }
+
+    // TODO: key generation blame
+    let res_stage2 = keygen_stage2(&input_stage2);
+    let res_stage2 = if let Ok(res) = res_stage2 { res } else {
+        return Err(ErrorResult::ComError(res_stage2.unwrap_err()));
+    };
+
+    // point_vec: to memory y_i of each party
+    // enc_keys: the symmetric encryption key use to send Feldman-VSS secret share in broadcast channel
     let mut point_vec: Vec<GE> = Vec::new();
     let mut enc_keys: Vec<Vec<u8>> = Vec::new();
     for i in 1..=params.share_count {
@@ -166,9 +186,13 @@ pub async fn gg20_keygen_client (
         }
     }
 
+    // generate the public key {y_sum=\sum y_i} of signature
     let (head, tail) = point_vec.split_at(1);
     let y_sum = tail.iter().fold(head[0], |acc, x| acc + x);
 
+    // P_i sends secret share to P_j
+    // using corresponding aes encryption key between P_i and P_j to encrypt 
+    // the secret share
     let mut j = 0;
     for (k, i) in (1..=params.share_count).enumerate() {
         if i != party_num_int {
@@ -191,6 +215,7 @@ pub async fn gg20_keygen_client (
             j += 1;
         }
     }
+    // P_i get encrypted secret share from P_j
     // get shares from other parties.
     let poll_result = get_data_p2p(
         db_mtx.clone(),
@@ -205,6 +230,8 @@ pub async fn gg20_keygen_client (
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
+    // P_i using corresponding aes encryption key between P_i and P_j
+    // to decrypt the ciphertext from P_j to get secret share
     // decrypt shares from other parties.
     let mut j = 0;
     let mut party_shares: Vec<FE> = Vec::new();
@@ -265,7 +292,16 @@ pub async fn gg20_keygen_client (
         index_s: (party_num_int - 1) as usize,
         params_s: params.clone(),
     };
-    let res_stage3 = keygen_stage3(&input_stage3).expect("stage 3 keygen failed.");
+    // 1. Verify the correctness of each VSS secret share
+    // 2. Generate y and x_i for each party
+    // 3. Generate discrete log proof of x_i
+    // TODO: key generation blame
+
+    let stage3_result = keygen_stage3(&input_stage3);
+    let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
+        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+    };
+
     // round 5: send dlog proof
     broadcast_data(
         tx.clone(),
@@ -306,7 +342,12 @@ pub async fn gg20_keygen_client (
         dlog_proof_vec_s: dlog_proof_vec.clone(),
         y_vec_s: point_vec.clone(),
     };
-    let _ = keygen_stage4(&input_stage4).expect("keygen stage4 failed.");
+    // Verify other parties' discrete log proof of their x_i
+    // TODO: key generation blame
+
+    let stage4_result = keygen_stage4(&input_stage4);
+    if let Err(e) = stage4_result { return Err(ErrorResult::ComError(e));}
+
     //save key to file:
     let paillier_key_vec = (0..params.share_count)
         .map(|i| bc1_vec[i as usize].e.clone())
