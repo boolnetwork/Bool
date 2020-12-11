@@ -587,7 +587,7 @@ pub async fn gg20_sign_client(
     // TODO: phase 5 error blame
     // generate local state for each party
     let res_stage7 = sign_stage7(&input_stage7);
-    if let Err(err) = res_stage7.clone() {
+    if let Err(mut err) = res_stage7.clone() {
         match err.error_type() {
             s if s == "bad gamma_i decommit".to_string() => {
             return Err(ErrorResult::ComError(err));
