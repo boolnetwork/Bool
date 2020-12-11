@@ -776,7 +776,7 @@ pub async fn gg20_sign_client(
                     m_b_w_vec_all,
                     &local_state_vec[..],
                 );
-                let err = global_state.phase6_blame(&res_stage5.R, &res_stage4.sigma_i).expect_err("No Bad Actors Found");
+                let err = global_state.phase6_blame(&res_stage5.R).expect_err("No Bad Actors Found");
                 return Err(ErrorResult::ComError(err));
             },
             _ => {
