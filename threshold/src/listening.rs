@@ -9,7 +9,7 @@ use sp_api::{ProvideRuntimeApi, CallApiAt};
 use parking_lot::Mutex;
 use sp_core::Pair;
 use sp_core::sr25519::Pair as edPair;
-use sp_core::sr25519;
+pub use sp_core::sr25519;
 use sp_core::ecdsa;
 use sc_client_api::{BlockchainEvents};
 
@@ -273,7 +273,6 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
 #[derive(Debug, Clone)]
 pub struct TssSender<V,B> {
     pub spv: V,
-    pub tss: u64,
     pub command_tx: TracingUnboundedSender<WorkerCommand>,
     pub a: std::marker::PhantomData<B>,
     pub mission_counter: Arc<Mutex<u64>>,
@@ -286,7 +285,6 @@ impl <V,B>TssSender<V,B>
     pub fn new(spv: V, command_tx: TracingUnboundedSender<WorkerCommand>) -> Self {
         TssSender {
             spv: spv,
-            tss: 5,
             command_tx,
             a: PhantomData,
             mission_counter: Arc::new(Mutex::new(0)),
@@ -298,24 +296,10 @@ impl <V,B>TssSender<V,B>
     }
 
     fn key_gen(&self, index: u64, store: Vec<u8>, n: u16, t: u16){
-        let store2 = "boolbtc.store";
-        // TODO: need return result in the future
-        // match key_gen(store2){
-        //     Ok((pk,pk_vec)) => {
-        //         let data = TxMessage::new(TxType::TssKeyGen(pk.to_vec(),pk_vec));
-        //         self.submit_tx(data);
-        //         let data2 = TxMessage::new(TxType::BtcAddressSet(pk.to_vec()));
-        //         self.submit_tx(data2);
-        //         set_pubkey(pk.to_vec(),store2);
-        //     },
-        //     _ => return ,
-        // }
         self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t)).expect("send command failed");
     }
 
-    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) /*-> Option<Vec<u8>>*/{
-        // let pubkey = self.spv.tss_pubkey();
-        // debug!(target:"keysign", "pubkey {:?}", pubkey);
+    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) {
         self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t, message_str)).expect("send command failed");
     }
 
@@ -367,39 +351,3 @@ impl <V,B>TssSender<V,B>
     }
 }
 
-pub fn start_listener<A, B, C, Block>(
-    client: Arc<C>,
-    pool: Arc<A>,
-    command_tx: TracingUnboundedSender<WorkerCommand>,
-    _keystore: KeyStorePtr,
-) -> impl Future<Output = ()> + Send + 'static
-    where
-        A: TransactionPool<Block = Block> + 'static,
-        Block: BlockT,
-        B: backend::Backend<Block> + Send + Sync + 'static,
-        C: BlockBuilderProvider<B, Block, C> + HeaderBackend<Block> + ProvideRuntimeApi<Block> + BlockchainEvents<Block>
-        + CallApiAt<Block> + Send + Sync + 'static,
-        Block::Hash: Into<sp_core::H256>
-{
-
-    let _sign_key = "2f2f416c69636508080808080808080808080808080808080808080808080808".to_string();
-    let key = sr25519::Pair::from_string(&format!("//{}", "Eve"), None)
-        .expect("static values are valid; qed");
-
-    //let key_seed = sr25519::Pair::from_seed_slice(&[0x25,0xb4,0xfd,0x88,0x81,0x3f,0x5e,0x16,0xd4,0xbe,0xa6,0x28
-    //	,0x39,0x02,0x89,0x57,0xf9,0xe3,0x40,0x10,0x8e,0x4e,0x93,0x73,0xd0,0x8b,0x31,0xb0,0xf6,0xe3,0x04,0x40]).unwrap();
-
-    let info = client.info();
-    let at = BlockId::Hash(info.best_hash);
-
-    let tx_sender = TxSender::new(
-        client,
-        pool,
-        key,
-        Arc::new(parking_lot::Mutex::new(PacketNonce {nonce:0,last_block:at})),
-    );
-
-    let tss_sender = TssSender::new(tx_sender, command_tx);
-
-    tss_sender.start(TssRole::Party)
-}

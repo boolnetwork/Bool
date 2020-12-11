@@ -205,7 +205,7 @@ pub fn get_data_broadcasted(
                                 if let None = db.get(&key) { err_res.push(i.into()); }
                             }
                         }
-                        let error_type = format!("index:{}-{}-timeout", index, round).to_string();
+                        let error_type = format!("index-{}-{}-timeout", index, round).to_string();
                         return Err(ErrorType::new(error_type, err_res));
                     }
                     // normal handle
@@ -248,7 +248,7 @@ pub fn get_data_p2p(
                                 if let None = db.get(&key) { err_res.push(i.into()); }
                             }
                         }
-                        let error_type = format!("index:{}-{}-timeout", index, round).to_string();
+                        let error_type = format!("index-{}-{}-timeout", index, round).to_string();
                         return Err(ErrorType::new(error_type, err_res));
                     }
                     // normal handle
