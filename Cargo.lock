@@ -3769,6 +3769,7 @@ checksum = "0debeb9fcf88823ea64d64e4a815ab1643f33127d995978e099942ce38f25238"
 [[package]]
 name = "multi-party-ecdsa"
 version = "0.4.3"
+source = "git+https://github.com/boolnetwork/multi-party-ecdsa-p2p.git#1ad54f93a1cc95eae88a183655f8d2a80145b8cc"
 dependencies = [
  "centipede",
  "curv 0.2.6",

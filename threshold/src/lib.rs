@@ -137,7 +137,7 @@ impl<B: BlockT> Worker<B> {
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "keygen mission timeout: {:?}", e);
+                        info!(target: "afg", "keygen mission failed: {:?}", e);
                     })
                 );
             },
@@ -155,7 +155,7 @@ impl<B: BlockT> Worker<B> {
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "sign mission timeout: {:?}", e);
+                        info!(target: "afg", "sign mission failed: {:?}", e);
                     })
                 );
             },

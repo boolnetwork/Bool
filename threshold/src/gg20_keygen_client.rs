@@ -373,7 +373,7 @@ pub async fn gg20_keygen_client (
 
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    info!(target: "afg", "keygen completed in: {:?} seconds", difference);
+    info!(target: "afg", "keygen completed in: {:?} seconds *********", difference);
 
     Ok(TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap()))
 }

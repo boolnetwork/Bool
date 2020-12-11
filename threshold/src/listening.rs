@@ -60,6 +60,27 @@ pub enum TssRole{
     Party,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TxType {
+    Spv,
+    System,
+    TssKeyGen(Vec<u8>,Vec<Vec<u8>>),
+    TssSign(Vec<u8>,Vec<Vec<u8>>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TxMessage {
+    pub tx_type: TxType
+}
+
+impl TxMessage{
+    pub fn new(data: TxType) -> Self{
+        TxMessage{
+            tx_type: data
+        }
+    }
+}
+
 trait PrefixKey {
     fn as_prefix_key(&self) -> Vec<u8>;
 }
@@ -201,12 +222,9 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
     //         let nonce = self.get_nonce();
     //
     //         let function = match relay_message.tx_type {
-    //             TxType::System => Call::System(SystemCall::remark(vec![1u8])),
     //             TxType::TssKeyGen(tss_pubkey, pk_vec) => Call::Tss(TssCall::key_created_result_is(tss_pubkey, pk_vec, vec![0u8])),
-    //             TxType::TssKeyGenBool(tss_pubkey, pk_vec) => Call::Tss(TssCall::key_created_result_is_bool(tss_pubkey, pk_vec, vec![0u8])),
-    //             TxType::TssKeyGenFc(tss_pubkey, pk_vec) => Call::Tss(TssCall::key_created_result_is_fc(tss_pubkey, pk_vec, vec![0u8])),
-    //             TxType::BtcAddressSet(tss_pubkey) => Call::BtcBridge(BtcBridgeCall::set_tss_revice_address(tss_pubkey)),
-    //             TxType::Signature(signed_btc_tx) => Call::BtcBridge(BtcBridgeCall::put_signedbtctxproposal(signed_btc_tx)),
+    //             TxType::TssSign(tss_pubkey, pk_vec) => Call::Tss(TssCall::key_created_result_is_bool(tss_pubkey, pk_vec, vec![0u8])),
+    //             TxType::System => Call::System(SystemCall::remark(vec![1u8])),
     //             _ => Call::System(SystemCall::remark(vec![1u8])),
     //         };
     //

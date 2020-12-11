@@ -868,7 +868,7 @@ pub async fn gg20_sign_client(
     fs::write("sign.store", sign_json.clone()).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    info!(target: "afg", "sign completed in: {:?} seconds", difference);
+    info!(target: "afg", "sign completed in: {:?} seconds ************", difference);
 
     Ok(TssResult::SignResult(sign_json))
 }
