@@ -30,10 +30,12 @@ use gg20_keygen_client::{gg20_keygen_client};
 use gg20_sign_client::{gg20_sign_client};
 use communicate::{NetworkBridge, Error, Network as NetworkT};
 use gossip::{get_topic};
-use listening::{WorkerCommand, TssSender, TxSender, SuperviseClient, TssRole, sr25519, PacketNonce};
+use listening::{WorkerCommand, TssSender, TxSender, SuperviseClient, TssRole, sr25519, PacketNonce,
+                StorageKey, StorageEventStream, PrefixKey};
 
 pub struct TssWork<Block: BlockT, N: NetworkT<Block>> {
     worker: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
+    tss_sender: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
     network: NetworkBridge<Block, N>,
 }
 
@@ -48,15 +50,19 @@ impl<Block: BlockT, N: NetworkT<Block> + Sync> TssWork<Block, N> {
     fn new(
         command_rx: TracingUnboundedReceiver<WorkerCommand>,
         network: NetworkBridge<Block, N>,
+        result_sender: TracingUnboundedSender<Result<TssResult, ErrorResult>>,
+        tss_sender: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
     ) -> Self {
         let worker = Worker::new(
             network.gossip_engine.clone(),
             command_rx,
-            network.service().local_id()
+            network.service().local_id(),
+            result_sender
         );
         let worker = Box::pin(worker);
         TssWork {
             worker,
+            tss_sender,
             network,
         }
     }
@@ -68,6 +74,24 @@ impl<Block: BlockT, N: NetworkT<Block> + Sync> Future for TssWork<Block, N>
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Future::poll(Pin::new(&mut self.worker), cx) {
+            Poll::Pending => {},
+            Poll::Ready(e) => {
+                match e {
+                    Err(Error::Safety(error_string)) => {
+                        return Poll::Ready(
+                            Err(Error::Safety(format!("Worker has concluded for: {}.", error_string)))
+                        )
+                    },
+                    _ => {
+                        return Poll::Ready(
+                            Err(Error::Safety("Unknown reason cause threshold shut down".into()))
+                        )
+                    },
+                }
+            }
+        }
+
+        match Future::poll(Pin::new(&mut self.tss_sender), cx) {
             Poll::Pending => {},
             Poll::Ready(e) => {
                 match e {
@@ -98,18 +122,21 @@ pub struct Worker<B: BlockT> {
     command_rx: TracingUnboundedReceiver<WorkerCommand>,
     messages: HashSet<Vec<u8>>,
     local_peer_id: PeerId,
+    result_sender: Arc<TracingUnboundedSender<Result<TssResult, ErrorResult>>>,
 }
 
 impl<B: BlockT> Worker<B> {
     pub fn new(
         gossip_engine: Arc<Mutex<GossipEngine<B>>>,
         command_rx: TracingUnboundedReceiver<WorkerCommand>,
-        local_peer_id: PeerId
+        local_peer_id: PeerId,
+        result_sender: TracingUnboundedSender<Result<TssResult, ErrorResult>>,
     ) -> Self {
         let db_mtx = Arc::new(RwLock::new(HashMap::new()));
         let id_list = Arc::new(RwLock::new(HashMap::new()));
         let (low_sender, low_receiver) = tracing_unbounded("mpsc_mission_worker");
         let low_sender = Arc::new(Mutex::new(low_sender));
+        let result_sender = Arc::new(result_sender);
         Worker {
             db_mtx,
             id_list,
@@ -117,6 +144,7 @@ impl<B: BlockT> Worker<B> {
             low_receiver,
             gossip_engine,
             command_rx,
+            result_sender,
             messages: HashSet::new(),
             local_peer_id
         }
@@ -129,17 +157,15 @@ impl<B: BlockT> Worker<B> {
                 let start_time = SystemTime::now();
                 let local_peer_id = self.local_peer_id.clone();
                 let mission_param = MissionParam { start_time, index, store, n, t, local_peer_id };
-
+                let result_sender = self.result_sender.clone();
                 async_std::task::spawn(
                     gg20_keygen_client(
                         self.low_sender.clone(),
                         self.db_mtx.clone(),
                         self.id_list.clone(),
+                        self.result_sender.clone(),
                         mission_param
-                    ).map_err(|e|{
-                        // TODO: return the result to chain
-                        info!(target: "afg", "keygen mission failed: {:?}", e);
-                    })
+                    ).map_err(|e|{ info!(target: "afg", "keygen mission failed: {:?}", e); })
                 );
             },
             WorkerCommand::Sign(index, store, n, t, message_str) => {
@@ -147,17 +173,16 @@ impl<B: BlockT> Worker<B> {
                 let local_peer_id = self.local_peer_id.clone();
                 let mission_param = MissionParam { start_time, index, store, n, t, local_peer_id };
                 let message_str = String::from_utf8_lossy(&message_str).into_owned();
+                let result_sender = self.result_sender.clone();
                 async_std::task::spawn(
                     gg20_sign_client(
                         self.low_sender.clone(),
                         self.db_mtx.clone(),
                         self.id_list.clone(),
+                        self.result_sender.clone(),
                         message_str,
                         mission_param
-                    ).map_err(|e|{
-                        // TODO: return the result to chain
-                        info!(target: "afg", "sign mission failed: {:?}", e);
-                    })
+                    ).map_err(|e|{ info!(target: "afg", "sign mission failed: {:?}", e); })
                 );
             },
         }
@@ -170,7 +195,6 @@ impl<Block: BlockT> Future for Worker<Block> {
         match Stream::poll_next(Pin::new(&mut self.command_rx), cx) {
             Poll::Pending => {},
             Poll::Ready(None) => {
-                // the `commands_rx` stream should never conclude since it's never closed.
                 return Poll::Ready(
                     Err(Error::Safety("`commands_rx` was closed.".into()))
                 )
@@ -264,7 +288,7 @@ where
         keystore,
     } = params;
     let (command_tx, command_rx) = tracing_unbounded("mpsc_tss_command");
-
+    let (result_tx, result_rx) = tracing_unbounded("mpsc_tss_result");
     // start listener
     let _sign_key = "2f2f416c69636508080808080808080808080808080808080808080808080808".to_string();
     let key = sr25519::Pair::from_string(&format!("//{}", "Eve"), None)
@@ -279,21 +303,25 @@ where
         key,
         Arc::new(parking_lot::Mutex::new(PacketNonce {nonce:0,last_block:at})),
     );
-    let tss_sender = TssSender::new(tx_sender, command_tx);
+    let events_key = StorageKey(b"System Events".as_prefix_key());
+
+    let storage_stream: StorageEventStream<Block::Hash> = tx_sender.get_notification_stream(Some(&[events_key]), None);
+
+    let tss_sender = TssSender::new(tx_sender, command_tx, result_rx, storage_stream);
 
     //start work
     let network = NetworkBridge::new(network);
     let work = TssWork::new(
         command_rx,
         network,
+        result_tx,
+        Box::pin(tss_sender)
     );
     let work = work.map(|res| match res {
         Ok(()) => error!(target: "afg", "tss work future has concluded naturally, this should be unreachable."),
         Err(e) => error!(target: "afg", "tss work error: {:?}", e),
     });
 
-    let listener = tss_sender.start(TssRole::Party).then(|_| future::pending::<()>());
-
-    Ok(future::select(work, listener).map(drop))
+    Ok(future::select(work, future::pending::<()>()).map(drop))
 }
 

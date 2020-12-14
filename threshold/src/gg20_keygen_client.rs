@@ -39,6 +39,7 @@ pub async fn gg20_keygen_client (
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    result_sender: Arc<TracingUnboundedSender<Result<TssResult, ErrorResult>>>,
     mission_params: MissionParam,
 ) -> Result<TssResult, ErrorResult> {
     let totaltime = SystemTime::now();
@@ -109,7 +110,9 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     // public information: the vector contains KGC_i
@@ -141,7 +144,9 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut decom1_vec = round2_ans_vec
@@ -165,7 +170,9 @@ pub async fn gg20_keygen_client (
     // TODO: key generation blame
     let res_stage2 = keygen_stage2(&input_stage2);
     let res_stage2 = if let Ok(res) = res_stage2 { res } else {
-        return Err(ErrorResult::ComError(res_stage2.unwrap_err()));
+        let err_res = Err(ErrorResult::ComError(res_stage2.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     // point_vec: to memory y_i of each party
@@ -227,7 +234,9 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round3_ans_vec = if let Ok(round3_ans_vec) =  poll_result { round3_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     // P_i using corresponding aes encryption key between P_i and P_j
@@ -269,7 +278,9 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut j = 0;
@@ -299,7 +310,9 @@ pub async fn gg20_keygen_client (
 
     let stage3_result = keygen_stage3(&input_stage3);
     let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
-        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        let err_res = Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     // round 5: send dlog proof
@@ -322,7 +335,9 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()))
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res
     };
 
     let mut j = 0;
@@ -346,7 +361,11 @@ pub async fn gg20_keygen_client (
     // TODO: key generation blame
 
     let stage4_result = keygen_stage4(&input_stage4);
-    if let Err(e) = stage4_result { return Err(ErrorResult::ComError(e));}
+    if let Err(e) = stage4_result {
+        let err_res = Err(ErrorResult::ComError(e));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
+    }
 
     //save key to file:
     let paillier_key_vec = (0..params.share_count)
@@ -374,8 +393,9 @@ pub async fn gg20_keygen_client (
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "keygen completed in: {:?} seconds *********", difference);
-
-    Ok(TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap()))
+    let result = TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap());
+    result_sender.unbounded_send(Ok(result.clone())).expect("tss_result send failed");
+    Ok(result)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartyKeyPair {

@@ -15,39 +15,32 @@ use sc_client_api::{BlockchainEvents};
 
 use futures::prelude::*;
 use futures::executor::block_on;
-
 use log::{debug, info};
-
 use sp_blockchain::{HeaderBackend};
-
 use parity_scale_codec::{Encode, Decode};
-
 use sp_transaction_pool::{TransactionPool, TransactionFor};
-
 use bool_runtime::{
     UncheckedExtrinsic ,Call, SignedPayload
 };
-
 use frame_system::{Call as SystemCall};
 use pallet_tss::{Call as TssCall};
-
 pub use bool_primitives::{AccountId, Signature, Balance, Index};
-use sp_core::storage::{StorageKey, StorageData};
-use sc_client_api::notifications::{StorageEventStream};
-
+pub use sp_core::storage::{StorageKey, StorageData};
+pub use sc_client_api::notifications::{StorageEventStream};
 use sp_core::twox_128;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Poll, Context};
 use sc_client_api::backend;
 use sc_block_builder::{BlockBuilderProvider};
 use sc_keystore::KeyStorePtr;
 use bool_runtime::{Event, Runtime } ;
 use bool_primitives::Hash;
 use frame_system::EventRecord;
-
 use pallet_tss::{RawEvent};
-use sp_utils::mpsc::{TracingUnboundedSender};
-
-use futures::channel::mpsc;
+use sp_utils::mpsc::{TracingUnboundedSender, TracingUnboundedReceiver};
+use crate::common::{TssResult, ErrorResult};
+use crate::communicate::Error;
 
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
@@ -81,7 +74,7 @@ impl TxMessage{
     }
 }
 
-trait PrefixKey {
+pub trait PrefixKey {
     fn as_prefix_key(&self) -> Vec<u8>;
 }
 
@@ -270,24 +263,34 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
     // }
 }
 
-#[derive(Debug, Clone)]
-pub struct TssSender<V,B> {
-    pub spv: V,
-    pub command_tx: TracingUnboundedSender<WorkerCommand>,
-    pub a: std::marker::PhantomData<B>,
-    pub mission_counter: Arc<Mutex<u64>>,
-}
-
-impl <V,B>TssSender<V,B>
+#[derive(Debug)]
+pub struct TssSender<V, B>
     where   V: SuperviseClient<B> + Send + Sync + 'static,
             B: BlockT,
 {
-    pub fn new(spv: V, command_tx: TracingUnboundedSender<WorkerCommand>) -> Self {
+    pub spv: V,
+    pub command_tx: TracingUnboundedSender<WorkerCommand>,
+    pub result_rx: TracingUnboundedReceiver<Result<TssResult, ErrorResult>>,
+    pub a: std::marker::PhantomData<B>,
+    pub mission_counter: Arc<Mutex<u64>>,
+    pub storage_stream: StorageEventStream<B::Hash>
+}
+
+impl <V, B>TssSender<V,B>
+    where   V: SuperviseClient<B> + Send + Sync + 'static,
+            B: BlockT,
+{
+    pub fn new(spv: V, command_tx: TracingUnboundedSender<WorkerCommand>,
+               result_rx: TracingUnboundedReceiver<Result<TssResult, ErrorResult>>,
+               storage_stream: StorageEventStream<B::Hash>
+    ) -> Self {
         TssSender {
             spv: spv,
             command_tx,
+            result_rx,
             a: PhantomData,
             mission_counter: Arc::new(Mutex::new(0)),
+            storage_stream
         }
     }
 
@@ -307,13 +310,22 @@ impl <V,B>TssSender<V,B>
         self.spv.get_notification_stream(Some(&[events_key]), None)
     }
 
-    pub fn start(mut self, _role: TssRole) -> impl Future<Output=()> + Send + 'static {
-        let events_key = StorageKey(b"System Events".as_prefix_key());
+}
 
-        let storage_stream: StorageEventStream<B::Hash> = self.get_stream(events_key);
-
-        let storage_stream = storage_stream
-            .for_each( move|(_blockhash,change_set)| {
+impl<V, B> Future for TssSender<V,B>
+    where   V: SuperviseClient<B> + Send + Sync + 'static,
+            B: BlockT,
+{
+    type Output = Result<(), Error>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match Stream::poll_next(Pin::new(&mut self.storage_stream), cx) {
+            Poll::Pending => {},
+            Poll::Ready(None) => {
+                return Poll::Ready(
+                    Err(Error::Safety("`storage_stream` was closed.".into()))
+                )
+            },
+            Poll::Ready(Some((_blockhash,change_set))) => {
                 let records: Vec<Vec<EventRecord<Event, Hash>>> = change_set
                     .iter()
                     .filter_map(|(_ , _, mbdata)| {
@@ -325,29 +337,60 @@ impl <V,B>TssSender<V,B>
                     })
                     .collect();
                 let events: Vec<Event> = records.concat().iter().cloned().map(|r| r.event).collect();
-                events.iter().for_each(|event| {
-                    // debug!(target:"keysign", "Event {:?}", event);
-                    if let Event::pallet_tss(e) = event {
-                        match e {
-                            RawEvent::GenKey(index, store, n, t, _time) => {
-                                if *self.mission_counter.lock() != *index {
-                                    self.key_gen(*index, (*store).to_vec(), *n, *t);
-                                    self.set_counter(*index);
+                let mut events = events.iter().cloned();
+                loop {
+                    match events.next() {
+                        Some(event) => {
+                            if let Event::pallet_tss(e) = event {
+                                match e {
+                                    RawEvent::GenKey(index, store, n, t, _time) => {
+                                        if *self.mission_counter.lock() != index {
+                                            self.key_gen(index, (*store).to_vec(), n, t);
+                                            self.set_counter(index);
+                                        }
+                                    },
+                                    RawEvent::Sign(index, store, n, t, message_str, _time) => {
+                                        if *self.mission_counter.lock() != index {
+                                            self.key_sign(index, (*store).to_vec(), n, t, (*message_str).to_vec());
+                                            self.set_counter(index);
+                                        }
+                                    },
+                                    _ => {}
                                 }
-                            },
-                            RawEvent::Sign(index, store, n, t, message_str, _time) => {
-                                if *self.mission_counter.lock() != *index {
-                                    self.key_sign(*index, (*store).to_vec(), *n, *t, (*message_str).to_vec());
-                                    self.set_counter(*index);
-                                }
-                            },
-                            _ => {}
-                        }
+                            }
+                        },
+                        None => break,
                     }
-                });
-                futures::future::ready(())
-            });
-        storage_stream
+                }
+            }
+        }
+
+        match Stream::poll_next(Pin::new(&mut self.result_rx), cx) {
+            Poll::Pending => {},
+            Poll::Ready(None) => {
+                return Poll::Ready(
+                    Err(Error::Safety("`result_rx` was closed.".into()))
+                )
+            },
+            Poll::Ready(Some(result)) => {
+                match result {
+                    Ok(tss_result) => {
+                        // TODO run submit
+                        println!("listener get tss_result *********************");
+                    },
+                    Err(error_result) => {
+                        // TODO run submit
+                        println!("listener get err_result *********************");
+                    }
+                }
+            },
+        }
+
+        Poll::Pending
     }
 }
 
+impl<V, B> Unpin for TssSender<V, B>
+    where   V: SuperviseClient<B> + Send + Sync + 'static,
+            B: BlockT,
+{}

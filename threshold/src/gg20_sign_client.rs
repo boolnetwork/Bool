@@ -62,6 +62,7 @@ pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    result_sender: Arc<TracingUnboundedSender<Result<TssResult, ErrorResult>>>,
     message_str: String,
     mission_params: MissionParam
 ) -> Result<TssResult, ErrorResult> {
@@ -138,7 +139,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round0_ans_vec = if let Ok(round0_ans_vec) = poll_result { round0_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut j = 0;
@@ -191,7 +194,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut j = 0;
@@ -288,7 +293,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut m_b_gamma_rec_vec: Vec<MessageB> = Vec::new();
@@ -338,7 +345,9 @@ pub async fn gg20_sign_client(
     // TODO: error handling
     let stage3_result = sign_stage3(&input_stage3);
     let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
-        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        let err_res = Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
     // Send out alpha, miu to other signers.
     let mut j = 0;
@@ -376,7 +385,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round3_ans_vec = if let Ok(round3_ans_vec) = poll_result { round3_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut alpha_vec = vec![];
@@ -423,7 +434,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut sigma_i_vec = vec![];
@@ -468,7 +481,9 @@ pub async fn gg20_sign_client(
     // TODO
     let stage5_result = sign_stage5(&input_stage5);
     let res_stage5 = if let Ok(res_stage5) = stage5_result { res_stage5 } else {
-        return Err(ErrorResult::ComError(stage5_result.unwrap_err()));
+        let err_res = Err(ErrorResult::ComError(stage5_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
     broadcast_data(
         tx.clone(),
@@ -489,7 +504,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut T_vec = vec![];
@@ -538,7 +555,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result {round6_ans_vec} else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut S_i_vec = vec![];
@@ -590,7 +609,9 @@ pub async fn gg20_sign_client(
     if let Err(mut err) = res_stage7.clone() {
         match err.error_type() {
             s if s == "bad gamma_i decommit".to_string() => {
-            return Err(ErrorResult::ComError(err));
+                let err_res = Err(ErrorResult::ComError(err));
+                result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                return err_res;
             },
             s if s == format!("phase5 R_dash_sum check failed {:?}", Error::Phase5BadSum) => {
                 // phase 5 error
@@ -626,7 +647,9 @@ pub async fn gg20_sign_client(
                     start_time
                 );
                 let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
-                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                    return err_res;
                 };
                 let mut local_state_vec = vec![];
                 let mut j = 0;
@@ -658,7 +681,9 @@ pub async fn gg20_sign_client(
                         start_time
                     );
                     let m_b_gamma_vec = if let Ok(m_b_gamma_vec) = poll_result {m_b_gamma_vec} else {
-                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                        return err_res;
                     };
                     let mut m_b_gamma_vec_blame = vec![];
                     for data in m_b_gamma_vec.iter() {
@@ -678,10 +703,14 @@ pub async fn gg20_sign_client(
                     &local_state_vec[..],
                 );
                 let bad_actors = global_state.phase5_blame().expect_err("No Bad Actors Found");
-                return Err(ErrorResult::ComError(bad_actors));
+                let err_res = Err(ErrorResult::ComError(bad_actors));
+                result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                return err_res;
             },
             s if s == "phase6".to_string() => {
-                return Err(ErrorResult::ComError(err));
+                let err_res = Err(ErrorResult::ComError(err));
+                result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                return err_res;
             },
             s if s == format!("phase6 S_i sum check failed {:?}", Error::Phase6Error) => {
                 let mut miu_randomness_vec = vec![];
@@ -727,7 +756,9 @@ pub async fn gg20_sign_client(
                 );
 
                 let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
-                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                    return err_res;
                 };
                 let mut local_state_vec = vec![];
                 let mut j = 0;
@@ -757,7 +788,9 @@ pub async fn gg20_sign_client(
                         start_time
                     );
                     let m_b_w_vec = if let Ok(m_b_w_vec) =  poll_result { m_b_w_vec } else {
-                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                        return err_res;
                     };
                     let mut m_b_w_vec_blame = vec![];
                     for data in m_b_w_vec.iter() {
@@ -777,11 +810,15 @@ pub async fn gg20_sign_client(
                     &local_state_vec[..],
                 );
                 let err = global_state.phase6_blame(&res_stage5.R).expect_err("No Bad Actors Found");
-                return Err(ErrorResult::ComError(err));
+                let err_res = Err(ErrorResult::ComError(err));
+                result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                return err_res;
             },
             _ => {
                 err.set_error_type(format!("Unknown error in sign_stage7"));
-                return Err(ErrorResult::ComError(err));
+                let err_res = Err(ErrorResult::ComError(err));
+                result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+                return err_res;
             }
         } // match end
     } // Error execution complete
@@ -806,7 +843,9 @@ pub async fn gg20_sign_client(
         start_time
     );
     let round7_ans_vec = if let Ok(round7_ans_vec) = poll_result { round7_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        let err_res = Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     };
 
     let mut local_sig_vec = vec![];
@@ -843,7 +882,9 @@ pub async fn gg20_sign_client(
             S_vec: S_i_vec,
         };
         let bad_actors = global_state.phase7_blame().expect_err("No Bad Actors Found");
-        return Err(ErrorResult::ComError(bad_actors));
+        let err_res = Err(ErrorResult::ComError(bad_actors));
+        result_sender.unbounded_send(err_res.clone()).expect("err_send failed");
+        return err_res;
     }
 
     let res_stage8 = res_stage8.unwrap();
@@ -869,6 +910,7 @@ pub async fn gg20_sign_client(
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "sign completed in: {:?} seconds ************", difference);
-
-    Ok(TssResult::SignResult(sign_json))
+    let res = TssResult::SignResult(sign_json);
+    result_sender.unbounded_send(Ok(res.clone())).expect("err_send failed");
+    Ok(res)
 }
