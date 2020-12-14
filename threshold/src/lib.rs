@@ -4,7 +4,8 @@ use log::{error, info};
 use sc_client_api::{backend::Backend, BlockchainEvents};
 use sp_api::{ProvideRuntimeApi, CallApiAt};
 use sp_blockchain::HeaderBackend;
-use sp_runtime::traits::Block as BlockT;
+use sp_core::Pair;
+use sp_runtime::{generic::BlockId, traits::Block as BlockT};
 use sp_transaction_pool::TransactionPool;
 use sc_keystore::KeyStorePtr;
 use sc_block_builder::BlockBuilderProvider;
@@ -24,12 +25,12 @@ mod gg20_keygen_client;
 mod gg20_sign_client;
 mod common;
 mod listening;
-use common::{GossipMessage, TssResult, Key, Entry, MissionParam, vec_contains_vecu8};
+use common::{GossipMessage, TssResult, ErrorResult, Key, Entry, MissionParam, vec_contains_vecu8};
 use gg20_keygen_client::{gg20_keygen_client};
 use gg20_sign_client::{gg20_sign_client};
 use communicate::{NetworkBridge, Error, Network as NetworkT};
 use gossip::{get_topic};
-use listening::{WorkerCommand, start_listener};
+use listening::{WorkerCommand, TssSender, TxSender, SuperviseClient, TssRole, sr25519, PacketNonce};
 
 pub struct TssWork<Block: BlockT, N: NetworkT<Block>> {
     worker: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
@@ -137,7 +138,7 @@ impl<B: BlockT> Worker<B> {
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "keygen mission timeout: {:?}", e);
+                        info!(target: "afg", "keygen mission failed: {:?}", e);
                     })
                 );
             },
@@ -155,7 +156,7 @@ impl<B: BlockT> Worker<B> {
                         mission_param
                     ).map_err(|e|{
                         // TODO: return the result to chain
-                        info!(target: "afg", "sign mission timeout: {:?}", e);
+                        info!(target: "afg", "sign mission failed: {:?}", e);
                     })
                 );
             },
@@ -165,7 +166,6 @@ impl<B: BlockT> Worker<B> {
 
 impl<Block: BlockT> Future for Worker<Block> {
     type Output = Result<(), Error>;
-    // TODO: how to open a task and close task
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Stream::poll_next(Pin::new(&mut self.command_rx), cx) {
             Poll::Pending => {},
@@ -253,7 +253,7 @@ where
     A: TransactionPool<Block = Block> + 'static,
     Block::Hash: Ord + Into<sp_core::H256>,
     N: NetworkT<Block> + Send + Sync + Clone + 'static,
-    B: Backend<Block> + Send + Sync + 'static,
+    B: Backend<Block> + Send + Sync + 'static + Unpin,
     C: BlockBuilderProvider<B, Block, C> + HeaderBackend<Block> + ProvideRuntimeApi<Block> + BlockchainEvents<Block>
     + CallApiAt<Block> + Send + Sync + 'static,
 {
@@ -263,22 +263,36 @@ where
         network,
         keystore,
     } = params;
-
     let (command_tx, command_rx) = tracing_unbounded("mpsc_tss_command");
 
-    let network = NetworkBridge::new(network);
+    // start listener
+    let _sign_key = "2f2f416c69636508080808080808080808080808080808080808080808080808".to_string();
+    let key = sr25519::Pair::from_string(&format!("//{}", "Eve"), None)
+        .expect("static values are valid; qed");
+    //let key_seed = sr25519::Pair::from_seed_slice(&[0x25,0xb4,0xfd,0x88,0x81,0x3f,0x5e,0x16,0xd4,0xbe,0xa6,0x28
+    //	,0x39,0x02,0x89,0x57,0xf9,0xe3,0x40,0x10,0x8e,0x4e,0x93,0x73,0xd0,0x8b,0x31,0xb0,0xf6,0xe3,0x04,0x40]).unwrap();
+    let info = client.info();
+    let at = BlockId::Hash(info.best_hash);
+    let tx_sender = TxSender::new(
+        client,
+        pool,
+        key,
+        Arc::new(parking_lot::Mutex::new(PacketNonce {nonce:0,last_block:at})),
+    );
+    let tss_sender = TssSender::new(tx_sender, command_tx);
 
+    //start work
+    let network = NetworkBridge::new(network);
     let work = TssWork::new(
         command_rx,
         network,
     );
-
     let work = work.map(|res| match res {
         Ok(()) => error!(target: "afg", "tss work future has concluded naturally, this should be unreachable."),
         Err(e) => error!(target: "afg", "tss work error: {:?}", e),
     });
 
-    let listener = start_listener(client, pool, command_tx, keystore).then(|_| future::pending::<()>());
+    let listener = tss_sender.start(TssRole::Party).then(|_| future::pending::<()>());
 
     Ok(future::select(work, listener).map(drop))
 }

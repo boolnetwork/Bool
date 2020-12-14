@@ -4,12 +4,18 @@ use curv::arithmetic::traits::Converter;
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
 use curv::cryptographic_primitives::hashing::traits::Hash;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
+use curv::cryptographic_primitives::proofs::sigma_correct_homomorphic_elgamal_enc::*;
 use curv::elliptic::curves::traits::*;
-use curv::{FE, GE, BigInt};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::orchestrate::*;
+use curv::{FE, GE};
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::orchestrate_blame::*;
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
     Keys, LocalSignature, Parameters, SharedKeys, SignBroadcastPhase1, SignDecommitPhase1, SignKeys,
 };
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::blame::{
+    GlobalStatePhase5, GlobalStatePhase6, GlobalStatePhase7, LocalStatePhase5, LocalStatePhase6,
+};
+use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
+use multi_party_ecdsa::Error::{self};
 use multi_party_ecdsa::utilities::mta::{MessageA, MessageB};
 use paillier::*;
 use serde::{Deserialize, Serialize};
@@ -25,7 +31,7 @@ use std::time::{SystemTime};
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
              get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-             TssResult, MissionParam, ErrorResult, ErrorType };
+             TssResult, MissionParam, ErrorResult };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParamsFile {
@@ -155,6 +161,10 @@ pub async fn gg20_sign_client(
         party_keys: keypair.party_keys_s.clone(),
         shared_keys: keypair.shared_keys,
     };
+
+    // generate { sign_keys: {w_i, g_w_i, k_i, gamma_i, g_gamma_i},
+    //            private_secret: {u_i, x_i, dk}, C_i, D_i,
+    //            message c_A from P_i to P_j to do MtAwc }
     let res_stage1 = sign_stage1(&input_stage1);
     // publish message A  and Commitment and then gather responses from other parties.
     broadcast_data(
@@ -204,6 +214,8 @@ pub async fn gg20_sign_client(
             j += 1;
         }
     }
+    // generate aes encryption key between P_i and P_j
+    // encryption key is (g^{w_j})^{w_i} = g^{w_i·w_j}
     let mut enc_key: Vec<Vec<u8>> = vec![];
     for (i, k) in signers_vec.iter().enumerate() {
         if *k != signers_vec[party_num_int as usize - 1] as usize {
@@ -230,6 +242,7 @@ pub async fn gg20_sign_client(
         l_s: signers_vec.clone(),
     };
 
+    // generate message B for P_j to P_i in MtAwc :{ proof of b/beta_tag, and c_B, which called as gamma_i or w_i }
     let res_stage2 = sign_stage2(&input_stage2).expect("sign stage2 failed.");
     // Send out MessageB, beta, ni to other signers so that they can calculate there alpha values.
     let mut j = 0;
@@ -255,6 +268,8 @@ pub async fn gg20_sign_client(
                     beta_enc,
                     res_stage2.w_i_vec[j].0.clone(),
                     ni_enc,
+                    res_stage2.gamma_i_vec[j].2.clone(),
+                    res_stage2.gamma_i_vec[j].3.clone(),
                 ))
                 .unwrap(),
                 GossipType::Chat
@@ -283,11 +298,19 @@ pub async fn gg20_sign_client(
     let mut beta_vec: Vec<FE> = vec![];
     let mut ni_vec: Vec<FE> = vec![];
 
+    let mut beta_randomness_vec = vec![];
+    let mut beta_tag_vec = vec![];
+
     for i in 0..THRESHOLD {
-        let (l_mb_gamma, l_enc_beta, l_mb_w, l_enc_ni): (MessageB, AEAD, MessageB, AEAD) =
+        let (l_mb_gamma, l_enc_beta, l_mb_w, l_enc_ni, l_beta_randomness, l_beta_tag): 
+            (MessageB, AEAD, MessageB, AEAD, BigInt, BigInt) =
             serde_json::from_str(&round2_ans_vec[i as usize]).unwrap();
         m_b_gamma_rec_vec.push(l_mb_gamma);
         m_b_w_rec_vec.push(l_mb_w);
+
+        beta_randomness_vec.push(l_beta_randomness);
+        beta_tag_vec.push(l_beta_tag);
+
         let out = aes_decrypt(&enc_key[i as usize], l_enc_beta);
         let bn = BigInt::from(&out[..]);
         beta_vec.push(ECScalar::from(&bn));
@@ -307,7 +330,16 @@ pub async fn gg20_sign_client(
         g_w_i_s: g_w_i_vec.clone(),
     };
 
-    let res_stage3 = sign_stage3(&input_stage3).expect("Sign stage 3 failed.");
+    // P_i verify the proof of c_B send from P_j to P_i
+    // encrypted the value of alpha or miu, which equals k_i·gamma_i(w_i)+beta'_ij(nu'_ij)
+    // and send back to P_j
+    // let res_stage3 = sign_stage3(&input_stage3).expect("Sign stage 3 failed.");
+
+    // TODO: error handling
+    let stage3_result = sign_stage3(&input_stage3);
+    let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
+        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+    };
     // Send out alpha, miu to other signers.
     let mut j = 0;
     for i in 1..THRESHOLD + 2 {
@@ -318,7 +350,7 @@ pub async fn gg20_sign_client(
             );
             let miu_enc: AEAD = aes_encrypt(
                 &enc_key[j],
-                &BigInt::to_vec(&res_stage3.alpha_vec_w[j].to_big_int()),
+                &BigInt::to_vec(&res_stage3.alpha_vec_w[j].0.to_big_int()),
             );
 
             sendp2p_data(
@@ -368,14 +400,16 @@ pub async fn gg20_sign_client(
         ni_vec_s: ni_vec.clone(),
         sign_keys_s: res_stage1.sign_keys.clone(),
     };
+
+    // generate sigma_i and delta_i from alpha,miu,beta,nu's vector
     let res_stage4 = sign_stage4(&input_stage4).expect("Sign Stage4 failed.");
-    //broadcast decommitment from stage1 and delta_i
+    // broadcast decommitment from stage1 and delta_i
     broadcast_data(
         tx.clone(),
         party_num_int,
         "round4",
         index,
-        serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i,)).unwrap(),
+        serde_json::to_string(&(res_stage1.decom1.clone(), res_stage4.delta_i, res_stage4.sigma_i,)).unwrap(),
         GossipType::Chat
     );
 
@@ -392,6 +426,8 @@ pub async fn gg20_sign_client(
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
+    let mut sigma_i_vec = vec![];
+
     let mut delta_i_vec = vec![];
     let mut decom1_vec = vec![];
     let mut j = 0;
@@ -399,16 +435,25 @@ pub async fn gg20_sign_client(
         if i == party_num_int {
             delta_i_vec.push(res_stage4.delta_i.clone());
             decom1_vec.push(res_stage1.decom1.clone());
+            sigma_i_vec.push(res_stage4.sigma_i.clone());
         } else {
-            let (decom_l, delta_l): (SignDecommitPhase1, FE) =
-                serde_json::from_str(&round4_ans_vec[j]).unwrap();
+            
+            let (decom_l, delta_l, sigma_l): (SignDecommitPhase1, FE, FE) =
+            serde_json::from_str(&round4_ans_vec[j]).unwrap();
+            
             delta_i_vec.push(delta_l);
             decom1_vec.push(decom_l);
+
+            sigma_i_vec.push(sigma_l);
+
             j += 1;
         }
     }
-
+    // Compute delta^{-1}
     let delta_inv_l = SignKeys::phase3_reconstruct_delta(&delta_i_vec);
+
+    // phase3_compute_t_i(sig)
+    let T_i = SignKeys::phase3_compute_t_i(&res_stage4.sigma_i.clone());
     let input_stage5 = SignStage5Input {
         m_b_gamma_vec: m_b_gamma_rec_vec.clone(),
         delta_inv: delta_inv_l.clone(),
@@ -418,13 +463,19 @@ pub async fn gg20_sign_client(
         sign_keys: res_stage1.sign_keys.clone(),
         s_ttag: signers_vec.len(),
     };
-    let res_stage5 = sign_stage5(&input_stage5).expect("Sign Stage 5 failed.");
+
+    // generate R and \overline{R}_i
+    // TODO
+    let stage5_result = sign_stage5(&input_stage5);
+    let res_stage5 = if let Ok(res_stage5) = stage5_result { res_stage5 } else {
+        return Err(ErrorResult::ComError(stage5_result.unwrap_err()));
+    };
     broadcast_data(
         tx.clone(),
         party_num_int,
         "round5",
         index,
-        serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(),)).unwrap(),
+        serde_json::to_string(&(res_stage5.R_dash.clone(), res_stage5.R.clone(), T_i.0.clone())).unwrap(),
         GossipType::Chat
     );
 
@@ -441,6 +492,8 @@ pub async fn gg20_sign_client(
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
+    let mut T_vec = vec![];
+
     let mut R_vec = vec![];
     let mut R_dash_vec = vec![];
     let mut j = 0;
@@ -448,16 +501,65 @@ pub async fn gg20_sign_client(
         if i == party_num_int {
             R_vec.push(res_stage5.R.clone());
             R_dash_vec.push(res_stage5.R_dash.clone());
+
+            T_vec.push(T_i.0.clone());
         } else {
-            let (R_dash, R): (GE, GE) = serde_json::from_str(&round5_ans_vec[j]).unwrap();
+            let (R_dash, R, t_j): (GE, GE, GE) = serde_json::from_str(&round5_ans_vec[j]).unwrap();
             R_vec.push(R);
             R_dash_vec.push(R_dash);
+
+            T_vec.push(t_j);
             j += 1;
         }
     }
 
-    let message_bn = HSha256::create_hash(&[&BigInt::from(message)]);
     let input_stage6 = SignStage6Input {
+        R: res_stage5.R.clone(),
+        sigma_i: res_stage4.sigma_i.clone(),
+        T_i: T_i.0.clone(),
+        l_i: T_i.1.clone(),
+    };
+    let res_stage6 = sign_stage6(&input_stage6).expect("stage6 sign failed");
+    broadcast_data(
+        tx.clone(),
+        party_num_int, 
+        "round6",
+        index,
+        serde_json::to_string(&(res_stage6.S_i.clone(), res_stage6.proof.clone())).unwrap(),
+        GossipType::Chat
+    );
+    let poll_result = get_data_broadcasted(
+        db_mtx.clone(),
+        party_num_int,
+        THRESHOLD + 1,
+        delay,
+        "round6",
+        index,
+        start_time
+    );
+    let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result {round6_ans_vec} else {
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+    };
+
+    let mut S_i_vec = vec![];
+    let mut homo_elgamal_proof_vec = vec![];
+    let mut j = 0;
+    for i in 1..THRESHOLD + 2 {
+        if i == party_num_int {
+           S_i_vec.push(res_stage6.S_i.clone());
+           homo_elgamal_proof_vec.push(res_stage6.proof.clone());
+        } else {
+            let (S_i, homo_elgamal_proof): (GE, HomoELGamalProof) = 
+                serde_json::from_str(&round6_ans_vec[j]).unwrap();
+            S_i_vec.push(S_i);
+            homo_elgamal_proof_vec.push(homo_elgamal_proof);
+            j += 1;
+        }
+    }
+
+    // m = Hash(M), M=message
+    let message_bn = HSha256::create_hash(&[&BigInt::from(message)]);
+    let input_stage7 = SignStage7Input {
         R_dash_vec: R_dash_vec.clone(),
         R: res_stage5.R.clone(),
         m_a: res_stage1.m_a.0.clone(),
@@ -472,15 +574,226 @@ pub async fn gg20_sign_client(
         ysum: keypair.y_sum_s.clone(),
         sign_key: res_stage1.sign_keys.clone(),
         message_bn: message_bn.clone(),
+        S_vec: S_i_vec.clone(),
+        homo_elgamal_proof_vec: homo_elgamal_proof_vec.clone(),
+        R_vec: R_vec.clone(),
+        T_vec: T_vec.clone(),
     };
-    let res_stage6 = sign_stage6(&input_stage6).expect("stage6 sign failed.");
+
+    // check the consistency between R_i and E_i(k_i)
+    // check the production of \overline{R}_i is equal with g
+    // return with local signature s_i
+
+    // TODO: phase 5 error blame
+    // generate local state for each party
+    let res_stage7 = sign_stage7(&input_stage7);
+    if let Err(mut err) = res_stage7.clone() {
+        match err.error_type() {
+            s if s == "bad gamma_i decommit".to_string() => {
+            return Err(ErrorResult::ComError(err));
+            },
+            s if s == format!("phase5 R_dash_sum check failed {:?}", Error::Phase5BadSum) => {
+                // phase 5 error
+                let mut beta_randomness_blame = vec![];
+                let mut beta_tag_blame = vec![];
+                for i in 0..signers_vec.len()-1 {
+                    beta_randomness_blame.push(res_stage2.gamma_i_vec[i].2.clone());
+                    beta_tag_blame.push(res_stage2.gamma_i_vec[i].3.clone());
+                }
+                let local_state = LocalStatePhase5 {
+                    k: res_stage1.sign_keys.k_i,
+                    k_randomness: res_stage1.m_a.1.clone(),
+                    gamma: res_stage1.sign_keys.gamma_i,
+                    beta_randomness: beta_randomness_blame,
+                    beta_tag: beta_tag_blame,
+                    encryption_key: keypair.party_keys_s.ek.clone(),
+                };
+                broadcast_data(
+                    tx.clone(),
+                    party_num_int,
+                    "phase5_blame",
+                    index,
+                    serde_json::to_string(&local_state.clone()).unwrap(),
+                    GossipType::Chat
+                );
+                let poll_result = get_data_broadcasted(
+                    db_mtx.clone(),
+                    party_num_int,
+                    THRESHOLD + 1,
+                    delay,
+                    "phase5_blame",
+                    index,
+                    start_time
+                );
+                let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
+                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                };
+                let mut local_state_vec = vec![];
+                let mut j = 0;
+                for i in 1..THRESHOLD + 2 {
+                    if i == party_num_int {
+                        local_state_vec.push(local_state.clone());
+                    } else {
+                        let local_state_i: LocalStatePhase5 = serde_json::from_str(&phase5_blame_ans_vec[j]).unwrap();
+                        local_state_vec.push(local_state_i.clone());
+                        j += 1;
+                    }
+                }
+                let mut ek_vec = vec![];
+                for i in 0..THRESHOLD+1 {
+                    ek_vec.push(keypair.paillier_key_vec_s[signers_vec[i as usize]].clone());
+                }
+                let g_gamma_vec = (0..decom1_vec.len())
+                    .map(|i| decom1_vec[i].g_gamma_i)
+                    .collect::<Vec<GE>>();
+                let mut m_b_gamma_vec_all = vec![];
+                for i in 1..THRESHOLD+2 {
+                    let poll_result = get_data_p2p(
+                        db_mtx.clone(),
+                        i,
+                        THRESHOLD+1,
+                        delay,
+                        "round2",
+                        index,
+                        start_time
+                    );
+                    let m_b_gamma_vec = if let Ok(m_b_gamma_vec) = poll_result {m_b_gamma_vec} else {
+                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    };
+                    let mut m_b_gamma_vec_blame = vec![];
+                    for data in m_b_gamma_vec.iter() {
+                        let (l_mb_gamma, _, _, _, _, _): 
+                            (MessageB, AEAD, MessageB, AEAD, BigInt, BigInt) =
+                            serde_json::from_str(&data).unwrap();
+                        m_b_gamma_vec_blame.push(l_mb_gamma);
+                    }
+                    m_b_gamma_vec_all.push(m_b_gamma_vec_blame);
+                }
+                let global_state = GlobalStatePhase5::local_state_to_global_state(
+                    &ek_vec[..],
+                    &delta_i_vec[..],
+                    &g_gamma_vec[..],
+                    &m_a_vec[..],
+                    m_b_gamma_vec_all,
+                    &local_state_vec[..],
+                );
+                let bad_actors = global_state.phase5_blame().expect_err("No Bad Actors Found");
+                return Err(ErrorResult::ComError(bad_actors));
+            },
+            s if s == "phase6".to_string() => {
+                return Err(ErrorResult::ComError(err));
+            },
+            s if s == format!("phase6 S_i sum check failed {:?}", Error::Phase6Error) => {
+                let mut miu_randomness_vec = vec![];
+                for i in 0..signers_vec.len()-1 {
+                    let rand = GlobalStatePhase6::extract_paillier_randomness(
+                        &m_b_w_rec_vec[i].c,
+                        &keypair.party_keys_s.dk,
+                    );
+                    miu_randomness_vec.push(rand);
+                }
+                let proof = GlobalStatePhase6::ecddh_proof(
+                    &res_stage4.sigma_i,
+                    &res_stage5.R,
+                    &res_stage6.S_i,
+                );
+                let miu_bigint_vec = (0..THRESHOLD)
+                    .map(|i|
+                        res_stage3.alpha_vec_w[i as usize].1.clone()
+                    ).collect::<Vec<BigInt>>();
+                let local_state = LocalStatePhase6 {
+                    k: res_stage1.sign_keys.k_i,
+                    k_randomness: res_stage1.m_a.1.clone(),
+                    miu: miu_bigint_vec.clone(),
+                    miu_randomness: miu_randomness_vec.clone(),
+                    proof_of_eq_dlog: proof,
+                };
+                broadcast_data(
+                    tx.clone(),
+                    party_num_int,
+                    "phase6_blame",
+                    index,
+                    serde_json::to_string(&local_state.clone()).unwrap(),
+                    GossipType::Chat
+                );
+                let poll_result = get_data_broadcasted(
+                    db_mtx.clone(),
+                    party_num_int,
+                    THRESHOLD + 1,
+                    delay,
+                    "phase6_blame",
+                    index,
+                    start_time
+                );
+
+                let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
+                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                };
+                let mut local_state_vec = vec![];
+                let mut j = 0;
+                for i in 1..THRESHOLD + 2 {
+                    if i == party_num_int {
+                        local_state_vec.push(local_state.clone());
+                    } else {
+                        let local_state_i: LocalStatePhase6 = 
+                            serde_json::from_str(&phase5_blame_ans_vec[j]).unwrap();
+                        local_state_vec.push(local_state_i.clone());
+                        j += 1;
+                    }
+                }
+                let mut ek_vec = vec![];
+                for i in 0..THRESHOLD+1 {
+                    ek_vec.push(keypair.paillier_key_vec_s[signers_vec[i as usize]].clone());
+                }
+                let mut m_b_w_vec_all = vec![];
+                for i in 1..THRESHOLD+2 {
+                    let poll_result = get_data_p2p(
+                        db_mtx.clone(),
+                        i, 
+                        THRESHOLD+1, 
+                        delay, 
+                        "round2",
+                        index,
+                        start_time
+                    );
+                    let m_b_w_vec = if let Ok(m_b_w_vec) =  poll_result { m_b_w_vec } else {
+                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    };
+                    let mut m_b_w_vec_blame = vec![];
+                    for data in m_b_w_vec.iter() {
+                        let (_, _, l_m_b_w, _, _, _): 
+                            (MessageB, AEAD, MessageB, AEAD, BigInt, BigInt) =
+                            serde_json::from_str(&data).unwrap();
+                            m_b_w_vec_blame.push(l_m_b_w);
+                    }
+                    m_b_w_vec_all.push(m_b_w_vec_blame);
+                }
+                let global_state = GlobalStatePhase6::local_state_to_global_state(
+                    &ek_vec[..],
+                    &S_i_vec[..],
+                    &g_w_i_vec[..],
+                    &m_a_vec[..],
+                    m_b_w_vec_all,
+                    &local_state_vec[..],
+                );
+                let err = global_state.phase6_blame(&res_stage5.R).expect_err("No Bad Actors Found");
+                return Err(ErrorResult::ComError(err));
+            },
+            _ => {
+                err.set_error_type(format!("Unknown error in sign_stage7"));
+                return Err(ErrorResult::ComError(err));
+            }
+        } // match end
+    } // Error execution complete
+
+    let res_stage7 = res_stage7.unwrap();
 
     broadcast_data(
         tx.clone(),
         party_num_int,
-        "round6",
+        "round7",
         index,
-        serde_json::to_string(&res_stage6.local_sig.clone()).unwrap(),
+        serde_json::to_string(&res_stage7.local_sig.clone()).unwrap(),
         GossipType::Chat
     );
     let poll_result = get_data_broadcasted(
@@ -488,11 +801,11 @@ pub async fn gg20_sign_client(
         party_num_int,
         THRESHOLD + 1,
         delay,
-        "round6",
+        "round7",
         index,
         start_time
     );
-    let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result { round6_ans_vec } else {
+    let round7_ans_vec = if let Ok(round7_ans_vec) = poll_result { round7_ans_vec } else {
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
@@ -500,19 +813,42 @@ pub async fn gg20_sign_client(
     let mut j = 0;
     for i in 1..THRESHOLD + 2 {
         if i == party_num_int {
-            local_sig_vec.push(res_stage6.local_sig.clone());
+            local_sig_vec.push(res_stage7.local_sig.clone());
         } else {
-            let local_sig: LocalSignature = serde_json::from_str(&round6_ans_vec[j]).unwrap();
+            let local_sig: LocalSignature = serde_json::from_str(&round7_ans_vec[j]).unwrap();
             local_sig_vec.push(local_sig.clone());
             j += 1;
         }
     }
-    let input_stage7 = SignStage7Input {
+    let input_stage8 = SignStage8Input {
         local_sig_vec: local_sig_vec.clone(),
         ysum: keypair.y_sum_s.clone(),
     };
-    let res_stage7 = sign_stage7(&input_stage7).expect("sign stage 7 failed");
-    let sig = res_stage7.local_sig;
+    // generate the joint signature, if it is correct
+    // let res_stage8 = sign_stage8(&input_stage8).expect("sign stage 8 failed");
+
+    // TODO: phase 7 blame
+    let res_stage8 = sign_stage8(&input_stage8);
+    if let Err(_) = res_stage8.clone() {
+        let s_vec = (0..THRESHOLD+1)
+            .map(|i|
+                local_sig_vec[i as usize].s_i.clone()
+            ).collect::<Vec<_>>();
+        let global_state = GlobalStatePhase7 {
+            s_vec,
+            r: res_stage7.local_sig.r,
+            R_dash_vec,
+            m: res_stage7.local_sig.m.clone(),
+            R: res_stage7.local_sig.R,
+            S_vec: S_i_vec,
+        };
+        let bad_actors = global_state.phase7_blame().expect_err("No Bad Actors Found");
+        return Err(ErrorResult::ComError(bad_actors));
+    }
+
+    let res_stage8 = res_stage8.unwrap();
+    
+    let sig = res_stage8.local_sig;
     println!(
         "party {:?} Output Signature: \nR: {:?}\ns: {:?} \nrecid: {:?} \n",
         party_num_int,
@@ -532,7 +868,7 @@ pub async fn gg20_sign_client(
     fs::write("sign.store", sign_json.clone()).expect("Unable to save !");
     let tt = SystemTime::now();
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
-    info!(target: "afg", "sign completed in: {:?} seconds", difference);
+    info!(target: "afg", "sign completed in: {:?} seconds ************", difference);
 
     Ok(TssResult::SignResult(sign_json))
 }
