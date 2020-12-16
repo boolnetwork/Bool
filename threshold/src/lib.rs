@@ -15,9 +15,11 @@ use sp_utils::mpsc::{tracing_unbounded, TracingUnboundedReceiver, TracingUnbound
 use parking_lot::Mutex;
 use std::collections::{HashSet, HashMap};
 use std::sync::{RwLock, Arc};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use std::pin::Pin;
 use std::task::{Poll, Context};
+use pallet_tss::MissionResult;
+use bool_runtime::apis::VendorApi;
 
 mod communicate;
 mod gossip;
@@ -25,12 +27,12 @@ mod gg20_keygen_client;
 mod gg20_sign_client;
 mod common;
 mod listening;
-use common::{GossipMessage, TssResult, ErrorResult, Key, Entry, MissionParam, vec_contains_vecu8};
+use common::{GossipMessage, Key, Entry, MissionParam, vec_contains_vecu8};
 use gg20_keygen_client::{gg20_keygen_client};
 use gg20_sign_client::{gg20_sign_client};
 use communicate::{NetworkBridge, Error, Network as NetworkT};
 use gossip::{get_topic};
-use listening::{WorkerCommand, TssSender, TxSender, SuperviseClient, TssRole, sr25519, PacketNonce,
+use listening::{WorkerCommand, TssSender, TxSender, SuperviseClient, sr25519, PacketNonce,
                 StorageKey, StorageEventStream, PrefixKey};
 
 pub struct TssWork<Block: BlockT, N: NetworkT<Block>> {
@@ -50,7 +52,7 @@ impl<Block: BlockT, N: NetworkT<Block> + Sync> TssWork<Block, N> {
     fn new(
         command_rx: TracingUnboundedReceiver<WorkerCommand>,
         network: NetworkBridge<Block, N>,
-        result_sender: TracingUnboundedSender<Result<TssResult, ErrorResult>>,
+        result_sender: TracingUnboundedSender<(u64, MissionResult)>,
         tss_sender: Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>,
     ) -> Self {
         let worker = Worker::new(
@@ -122,7 +124,7 @@ pub struct Worker<B: BlockT> {
     command_rx: TracingUnboundedReceiver<WorkerCommand>,
     messages: HashSet<Vec<u8>>,
     local_peer_id: PeerId,
-    result_sender: Arc<TracingUnboundedSender<Result<TssResult, ErrorResult>>>,
+    result_sender: Arc<TracingUnboundedSender<(u64, MissionResult)>>,
 }
 
 impl<B: BlockT> Worker<B> {
@@ -130,7 +132,7 @@ impl<B: BlockT> Worker<B> {
         gossip_engine: Arc<Mutex<GossipEngine<B>>>,
         command_rx: TracingUnboundedReceiver<WorkerCommand>,
         local_peer_id: PeerId,
-        result_sender: TracingUnboundedSender<Result<TssResult, ErrorResult>>,
+        result_sender: TracingUnboundedSender<(u64, MissionResult)>,
     ) -> Self {
         let db_mtx = Arc::new(RwLock::new(HashMap::new()));
         let id_list = Arc::new(RwLock::new(HashMap::new()));
@@ -280,6 +282,7 @@ where
     B: Backend<Block> + Send + Sync + 'static + Unpin,
     C: BlockBuilderProvider<B, Block, C> + HeaderBackend<Block> + ProvideRuntimeApi<Block> + BlockchainEvents<Block>
     + CallApiAt<Block> + Send + Sync + 'static,
+    C::Api: VendorApi<Block>,
 {
     let TssParams {
         client,

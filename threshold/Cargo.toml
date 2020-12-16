@@ -32,6 +32,7 @@ sp-block-builder = { version = "2.0.0" }
 sc-network = { version = "0.8.0" }
 sc-network-gossip = { version = "0.8.0" }
 sc-block-builder = { version = "0.8.0" }
+pallet-transaction-payment = { version = "2.0.0", default-features = false}
 bool-runtime = { version = "0.6.0", path = "../runtime" }
 bool-primitives = { version = "0.6.0", path = "../primitives" }
 pallet-tss = { version = "0.1.0", default-features = false, path = "../pallet-tss"}

@@ -65,6 +65,7 @@ use sp_runtime::generic::Era;
 
 /// Weights for pallets used in the runtime.
 mod weights;
+pub mod apis;
 
 // Make the WASM binary available.
 #[cfg(feature = "std")]
@@ -886,6 +887,16 @@ impl_runtime_apis! {
 		) -> Option<Vec<(Vec<u8>, KeyTypeId)>> {
 			SessionKeys::decode_into_raw_public_keys(&encoded)
 		}
+	}
+
+	impl apis::VendorApi<Block> for Runtime {
+		fn account_nonce(account: &AccountId) -> u64 {
+			System::account_nonce(account).into()
+		}
+
+		// fn is_tss_party(id: &AccountId ) -> bool {
+		//     Tss::members().contains(id)
+		// }
 	}
 }
 
