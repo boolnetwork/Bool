@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use log::{error, info};
+use log::{info};
 use curv::arithmetic::traits::Converter;
 use curv::cryptographic_primitives::hashing::hash_sha256::HSha256;
 use curv::cryptographic_primitives::hashing::traits::Hash;
@@ -14,7 +14,7 @@ use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::blame::{
     GlobalStatePhase5, GlobalStatePhase6, GlobalStatePhase7, LocalStatePhase5, LocalStatePhase6,
 };
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
+// use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 use multi_party_ecdsa::Error::{self};
 use multi_party_ecdsa::utilities::mta::{MessageA, MessageB};
 use paillier::*;
@@ -22,13 +22,12 @@ use serde::{Deserialize, Serialize};
 use std::{fs, time};
 use zk_paillier::zkproofs::DLogStatement;
 
-use sc_network::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::{SystemTime};
-
+use pallet_tss::{RType, MType, MissionResult, ErrorType as TErrorType};
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
              get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
              TssResult, MissionParam, ErrorResult };
@@ -59,6 +58,46 @@ pub struct PartyKeyPair {
 }
 
 pub async fn gg20_sign_client(
+    tx: Arc<Mutex<TracingUnboundedSender<String>>>,
+    db_mtx: Arc<RwLock<HashMap<Key, String>>>,
+    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    result_sender: Arc<TracingUnboundedSender<(u64, MissionResult)>>,
+    message_str: String,
+    mission_params: MissionParam
+) -> Result<TssResult, ErrorResult> {
+    let res = sign_client(tx, db_mtx, peer_ids, message_str, mission_params.clone());
+    match res.clone() {
+        Ok(tss_result) => {
+            if let TssResult::SignResult(s) = tss_result {
+                let result = MissionResult::new(MType::Sign, RType::Success(s.into_bytes()));
+                result_sender.unbounded_send((mission_params.index, result)).expect("res_send failed");
+            }
+        },
+        Err(error_result) => {
+            let error_result = match error_result {
+                ErrorResult::Timeout(error_type) => {
+                    let error_type = TErrorType::new(
+                        error_type.error_type().into_bytes(),
+                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
+                    );
+                    RType::TimeFailed(error_type)
+                },
+                ErrorResult::ComError(error_type) => {
+                    let error_type = TErrorType::new(
+                        error_type.error_type().into_bytes(),
+                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
+                    );
+                    RType::ComFailed(error_type)
+                }
+            };
+            let result = MissionResult::new(MType::Sign, error_result);
+            result_sender.unbounded_send((mission_params.index, result)).expect("err_send failed");
+        }
+    }
+    res
+}
+
+pub fn sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
@@ -590,7 +629,7 @@ pub async fn gg20_sign_client(
     if let Err(mut err) = res_stage7.clone() {
         match err.error_type() {
             s if s == "bad gamma_i decommit".to_string() => {
-            return Err(ErrorResult::ComError(err));
+                return Err(ErrorResult::ComError(err));
             },
             s if s == format!("phase5 R_dash_sum check failed {:?}", Error::Phase5BadSum) => {
                 // phase 5 error
@@ -870,5 +909,5 @@ pub async fn gg20_sign_client(
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "sign completed in: {:?} seconds ************", difference);
 
-    Ok(TssResult::SignResult(sign_json))
+    return Ok(TssResult::SignResult(sign_json));
 }

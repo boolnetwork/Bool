@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use log::{error, info};
+use log::{info};
 use curv::arithmetic::traits::Converter;
 use curv::cryptographic_primitives::proofs::sigma_dlog::DLogProof;
 use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
@@ -9,18 +9,18 @@ use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::orchestrate_blame:
 use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::party_i::{
     KeyGenBroadcastMessage1, KeyGenDecommitMessage1, Keys, Parameters, SharedKeys,
 };
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
+// use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
 use paillier::*;
 use serde::{Deserialize, Serialize};
 use std::{fs, time};
 use zk_paillier::zkproofs::DLogStatement;
 
-use sc_network::PeerId;
 use sp_utils::mpsc::{TracingUnboundedSender};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::SystemTime;
+use pallet_tss::{RType, MType, MissionResult, ErrorType as TErrorType};
 
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
             get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
@@ -36,6 +36,45 @@ impl From<Params> for Parameters {
 }
 
 pub async fn gg20_keygen_client (
+    tx: Arc<Mutex<TracingUnboundedSender<String>>>,
+    db_mtx: Arc<RwLock<HashMap<Key, String>>>,
+    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
+    result_sender: Arc<TracingUnboundedSender<(u64, MissionResult)>>,
+    mission_params: MissionParam,
+) -> Result<TssResult, ErrorResult> {
+    let res = keygen_client(tx, db_mtx, peer_ids, mission_params.clone());
+    match res.clone() {
+        Ok(tss_result) => {
+            if let TssResult::KeygenResult(s) = tss_result {
+                let result = MissionResult::new(MType::Keygen, RType::Success(s.into_bytes()));
+                result_sender.unbounded_send((mission_params.index, result)).expect("res_send failed");
+            }
+        },
+        Err(error_result) => {
+            let error_result = match error_result {
+                ErrorResult::Timeout(error_type) => {
+                    let error_type = TErrorType::new(
+                        error_type.error_type().into_bytes(),
+                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
+                    );
+                    RType::TimeFailed(error_type)
+                },
+                ErrorResult::ComError(error_type) => {
+                    let error_type = TErrorType::new(
+                        error_type.error_type().into_bytes(),
+                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
+                    );
+                    RType::ComFailed(error_type)
+                }
+            };
+            let result = MissionResult::new(MType::Keygen, error_result);
+            result_sender.unbounded_send((mission_params.index, result)).expect("err_send failed");
+        }
+    }
+    res
+}
+
+pub fn keygen_client (
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
     peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
@@ -322,7 +361,7 @@ pub async fn gg20_keygen_client (
         start_time
     );
     let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()))
+        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
     let mut j = 0;
@@ -346,7 +385,9 @@ pub async fn gg20_keygen_client (
     // TODO: key generation blame
 
     let stage4_result = keygen_stage4(&input_stage4);
-    if let Err(e) = stage4_result { return Err(ErrorResult::ComError(e));}
+    if let Err(e) = stage4_result {
+        return Err(ErrorResult::ComError(e));
+    }
 
     //save key to file:
     let paillier_key_vec = (0..params.share_count)
@@ -375,7 +416,7 @@ pub async fn gg20_keygen_client (
     let difference = tt.duration_since(totaltime).unwrap().as_secs_f32();
     info!(target: "afg", "keygen completed in: {:?} seconds *********", difference);
 
-    Ok(TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap()))
+    return Ok(TssResult::KeygenResult(serde_json::to_string(&y_sum).unwrap()));
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartyKeyPair {
