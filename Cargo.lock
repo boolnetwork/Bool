@@ -4453,6 +4453,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-thresh"
+version = "0.6.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-balances",
+ "parity-scale-codec",
+ "serde",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+]
+
+[[package]]
 name = "pallet-timestamp"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
