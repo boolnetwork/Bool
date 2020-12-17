@@ -15,6 +15,7 @@ use sp_runtime::traits::Block as BlockT;
 use futures::prelude::*;
 use sc_client_api::{ExecutorProvider, RemoteBackend};
 use sp_core::traits::BareCryptoStorePtr;
+use threshold::{self, run_threshold};
 use crate::executor::Executor;
 
 type FullClient = sc_service::TFullClient<Block, RuntimeApi, Executor>;
@@ -221,7 +222,7 @@ pub fn new_full_base(
 		let babe_config = sc_consensus_babe::BabeParams {
 			keystore: keystore.clone(),
 			client: client.clone(),
-			select_chain,
+			select_chain: select_chain.clone(),
 			env: proposer,
 			block_import,
 			sync_oracle: network.clone(),
@@ -268,6 +269,18 @@ pub fn new_full_base(
 		task_manager.spawn_handle().spawn("authority-discovery-worker", authority_discovery_worker);
 	}
 
+	let tss_params = threshold::TssParams {
+		client: client.clone(),
+		pool: transaction_pool.clone(),
+		network: network.clone(),
+		keystore: keystore.clone()
+	};
+
+	task_manager.spawn_essential_handle().spawn_blocking(
+		"tss-p2p",
+		run_threshold(tss_params)?
+	);
+
 	// if the node isn't actively participating in consensus then it doesn't
 	// need a keystore, regardless of which protocol we use below.
 	let keystore = if role.is_authority() {
@@ -280,7 +293,7 @@ pub fn new_full_base(
 		// FIXME #1578 make this available through chainspec
 		gossip_duration: std::time::Duration::from_millis(333),
 		justification_period: 512,
-		name: Some(name),
+		name: Some(name.clone()),
 		observer_enabled: false,
 		keystore,
 		is_authority: role.is_network_authority(),

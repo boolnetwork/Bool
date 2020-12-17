@@ -5,6 +5,8 @@ members = [
     "runtime",
     "cli",
     "pallets/thresh",
+    "threshold",
+    "pallet-tss",
 ]
 
 [profile.release]

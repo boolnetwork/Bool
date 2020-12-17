@@ -65,6 +65,7 @@ use sp_runtime::generic::Era;
 
 /// Weights for pallets used in the runtime.
 mod weights;
+pub mod apis;
 
 // Make the WASM binary available.
 #[cfg(feature = "std")]
@@ -637,6 +638,10 @@ impl pallet_identity::Trait for Runtime {
 	type WeightInfo = weights::pallet_identity::WeightInfo;
 }
 
+impl pallet_tss::Trait for Runtime {
+	type Event = Event;
+}
+
 /// Fixed gas price of `1`.
 pub struct FixedGasPrice;
 
@@ -679,6 +684,7 @@ construct_runtime!(
 		RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Module, Call, Storage},
 		Identity: pallet_identity::{Module, Call, Storage, Event<T>},
 		Scheduler: pallet_scheduler::{Module, Call, Storage, Event<T>},
+		Tss: pallet_tss::{Module, Call, Storage, Event<T>},
 	}
 );
 
@@ -881,6 +887,16 @@ impl_runtime_apis! {
 		) -> Option<Vec<(Vec<u8>, KeyTypeId)>> {
 			SessionKeys::decode_into_raw_public_keys(&encoded)
 		}
+	}
+
+	impl apis::VendorApi<Block> for Runtime {
+		fn account_nonce(account: &AccountId) -> u64 {
+			System::account_nonce(account).into()
+		}
+
+		// fn is_tss_party(id: &AccountId ) -> bool {
+		//     Tss::members().contains(id)
+		// }
 	}
 }
 
