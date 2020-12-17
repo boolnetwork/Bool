@@ -1,4 +1,4 @@
-use crate::{mock::*, Error, ThreshMode, ThreshPublic};
+use crate::{mock::*, Error, ThreshMode, ThreshPublic, ThresholdGroup, GroupState};
 use frame_support::{assert_noop, assert_ok, dispatch::DispatchError};
 use frame_system::{RawOrigin};
 
@@ -68,7 +68,7 @@ fn group_failed_if_unexpected() {
         // failed if no try group
         assert_noop!(
             Thresh::group(Origin::signed(TEST_ACCOUNT), 1, ThreshPublic(vec![0x00]), vec![0x00]),
-            Error::<Test>::InsufficientPartner
+            Error::<Test>::NoPendingGroup
         );
     });
 }
@@ -78,25 +78,47 @@ fn group_should_work() {
     new_test_ext().execute_with(|| {
         // try group on chain
         let mode = ThreshMode { t: 1, n: 3 };
-        assert_ok!(Thresh::try_group(RawOrigin::Root.into(), mode));
+        assert_ok!(Thresh::try_group(RawOrigin::Root.into(), mode.clone()));
         // check state
-        assert_eq!(Thresh::try_groups().len(), 1);
+        assert_eq!(Thresh::pending_groups().len(), 1);
         assert_eq!(Thresh::group_count(), 1);
 
+        let thresh_public = ThreshPublic(vec![0x00]);
+        let thresh_proof = vec![0x00];
+        assert_ok!(Thresh::group(
+            Origin::signed(1),
+            0,
+            thresh_public.clone(),
+            thresh_proof
+        ));
+
+        let online_group = ThresholdGroup {
+            id: 0,
+            mode: mode.clone(),
+            partners: vec![1, 2, 3],
+            state: GroupState::Working,
+            public: thresh_public
+        };
+
+        // error group id should failed.
         assert_noop!(Thresh::group(
             Origin::signed(1),
             1,
             ThreshPublic(vec![0x00]),
             vec![0x00]
-        ), Error::<Test>::NotTryGroup);
+        ), Error::<Test>::NoPendingGroup);
 
-        // submit off chain proof
+        // submit off-chain proof
         assert_ok!(Thresh::group(
             Origin::signed(1),
             0,
             ThreshPublic(vec![0x00]),
             vec![0x00]
         ));
+
+        // check state
+        let group = Thresh::groups(0);
+        assert_eq!(group, Some(online_group));
 
 
     });
@@ -109,17 +131,31 @@ fn exit_group_should_work() {
         let mode = ThreshMode { t: 1, n: 3 };
         assert_ok!(Thresh::try_group(RawOrigin::Root.into(), mode.clone()));
         // check state
-        assert_eq!(Thresh::try_groups().len(), 1);
+        assert_eq!(Thresh::pending_groups().len(), 1);
         assert_eq!(Thresh::group_count(), 1);
         // submit
+        let thresh_public = ThreshPublic(vec![0x00]);
+        let thresh_proof = vec![0x00];
         assert_ok!(Thresh::group(
             Origin::signed(1),
             0,
-            ThreshPublic(vec![0x00]),
-            vec![0x00]
+            thresh_public.clone(),
+            thresh_proof
         ));
 
+        let online_group = ThresholdGroup {
+            id: 0,
+            mode: mode.clone(),
+            partners: vec![1, 2, 3],
+            state: GroupState::Working,
+            public: thresh_public
+        };
+        // check state
+        let group = Thresh::groups(0);
+        assert_eq!(group, Some(online_group));
+
         assert_ok!(Thresh::exit(Origin::signed(1), 0));
+        // check state
 
     });
 }

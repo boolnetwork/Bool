@@ -74,6 +74,7 @@ pub struct ThresholdGroup<AccountId> {
     pub mode: ThreshMode,
     pub partners: Vec<AccountId>,
     pub state: GroupState,
+    /// The public key of threshold
     pub public: ThreshPublic
 }
 
@@ -120,7 +121,7 @@ decl_storage! {
         pub ActivePartners get(fn active_partners) : Vec<T::AccountId>;
 
         pub GroupCount get(fn group_count): GroupIndex = 0;
-        pub TryGroups get(fn try_groups): Vec<GroupIndex>;
+        pub PendingGroups get(fn pending_groups): Vec<GroupIndex>;
         pub Groups get(fn groups): map hasher(blake2_128_concat) GroupIndex => Option<ThresholdGroup<T::AccountId>>;
     }
 }
@@ -148,7 +149,7 @@ decl_error! {
         InsufficientValue,
         InsufficientBalance,
         InsufficientPartner,
-        NotTryGroup,
+        NoPendingGroup,
         NotJoined,
         AlreadyJoined,
         NoPermission,
@@ -245,7 +246,7 @@ decl_module! {
                 public: Default::default(),
             };
 
-            TryGroups::mutate(|s| { s.push(c); });
+            PendingGroups::mutate(|s| { s.push(c); });
             <Groups<T>>::insert(c, group);
             Self::deposit_event(RawEvent::TryGroup(c, mode, partners));
 
@@ -257,14 +258,15 @@ decl_module! {
         pub fn group(origin, gi: GroupIndex, public: ThreshPublic, _proof: Vec<u8>) -> DispatchResult {
             let _actor = ensure_signed(origin);
 
-            let try_groups = TryGroups::get();
-            if try_groups.is_empty() || !try_groups.contains(&gi){
-                Err(Error::<T>::NotTryGroup)?
+            let pending_groups = PendingGroups::get();
+            if pending_groups.is_empty() || !pending_groups.contains(&gi){
+                Err(Error::<T>::NoPendingGroup)?
             }
 
             // TODO check proof
             let mut group = <Groups<T>>::get(&gi).ok_or(Error::<T>::NoGroup)?;
             group.public = public.clone();
+            group.state = GroupState::Working;
             <Groups<T>>::insert(gi, group);
             Self::deposit_event(RawEvent::Grouped(gi, public));
 
@@ -309,10 +311,23 @@ decl_module! {
 
         /// Report the partner who committed the crime
         #[weight = 0]
-        pub fn blame_report(origin) -> DispatchResult {
+        pub fn report_blame(origin) -> DispatchResult {
             // TODO
             Ok(())
         }
+
+        /// A common interface that user submit off-chain message
+        #[weight = 0]
+        pub fn confirm(origin, msg: Vec<u8>, proof: Vec<u8>) -> DispatchResult {
+            // TODO
+            // assemble struct
+            // decode struct
+            // verify proof
+            // do execute
+
+            Ok(())
+        }
+
     }
 }
 
@@ -330,13 +345,11 @@ impl<T: Trait> Module<T> {
     }
 
     fn select_partners(n: u32) -> Vec<T::AccountId> {
-        // sort by stash
-        // or random selection.
-        Vec::new()
+        // TODO sort by stash or random selection.
+        Self::active_partners().into_iter().take(n as usize).collect()
     }
 
     fn select_partner_without_group(index: GroupIndex) -> T::AccountId {
         T::AccountId::default()
     }
-
 }
