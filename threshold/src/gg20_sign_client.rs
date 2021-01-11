@@ -418,8 +418,8 @@ pub fn sign_client(
         return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
     };
 
-    let mut alpha_vec = vec![];
-    let mut miu_vec = vec![];
+    let mut alpha_vec: Vec<FE> = vec![];
+    let mut miu_vec: Vec<FE> = vec![];
     for i in 0..THRESHOLD {
         let (l_alpha_enc, l_miu_enc): (AEAD, AEAD) =
             serde_json::from_str(&round3_ans_vec[i as usize]).unwrap();
@@ -432,11 +432,28 @@ pub fn sign_client(
         miu_vec.push(ECScalar::from(&bn));
     }
 
+    let delta_alpha_vec = res_stage3.alpha_vec_gamma.clone();
+
+    let delta_beta_vec = (0..res_stage2.gamma_i_vec.len())
+        .map(|i| {
+            res_stage2.gamma_i_vec[i].1.clone()
+        }).collect::<Vec<FE>>();
+
+    let sigma_miu_vec = (0..res_stage3.alpha_vec_w.len())
+        .map(|i| {
+            res_stage3.alpha_vec_w[i].0.clone()
+        }).collect::<Vec<FE>>();
+
+    let sigma_ni_vec = (0..res_stage2.w_i_vec.len())
+        .map(|i| {
+            res_stage2.w_i_vec[i].1.clone()
+        }).collect::<Vec<FE>>();
+
     let input_stage4 = SignStage4Input {
-        alpha_vec_s: alpha_vec.clone(),
-        beta_vec_s: beta_vec.clone(),
-        miu_vec_s: miu_vec.clone(),
-        ni_vec_s: ni_vec.clone(),
+        alpha_vec_s: delta_alpha_vec.clone(),
+        beta_vec_s: delta_beta_vec.clone(),
+        miu_vec_s: sigma_miu_vec.clone(),
+        ni_vec_s: sigma_ni_vec.clone(),
         sign_keys_s: res_stage1.sign_keys.clone(),
     };
 
