@@ -64,7 +64,7 @@ pallet-transaction-payment-rpc-runtime-api = { version = "2.0.0", default-featur
 pallet-scheduler = { version = "2.0.0", default-features = false }
 pallet-staking = { version = "2.0.0", default-features = false }
 pallet-staking-reward-curve = { version = "2.0.0", default-features = false }
-pallet-tss = { default-features = false, path = "../pallet-tss"}
+pallet-thresh = { default-features = false, path = "../pallets/thresh"}
 
 # custom pallets
 
@@ -123,5 +123,5 @@ std = [
 	"sp-transaction-pool/std",
 	"pallet-utility/std",
 	"sp-version/std",
-	"pallet-tss/std",
+	"pallet-thresh/std",
 ]

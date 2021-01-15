@@ -27,10 +27,11 @@ use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::{SystemTime};
-use pallet_tss::{RType, MType, MissionResult, ErrorType as TErrorType};
+use pallet_thresh::ErrorType as TErrorType;
+use crate::listening::{RType, MType, MissionResult};
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
              get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-             TssResult, MissionParam, ErrorResult };
+             TssResult, MissionParam, ErrorType, get_bad_actors};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParamsFile {
@@ -60,37 +61,25 @@ pub struct PartyKeyPair {
 pub async fn gg20_sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
-    result_sender: Arc<TracingUnboundedSender<(u64, MissionResult)>>,
+    result_sender: Arc<TracingUnboundedSender<(u32, MissionResult)>>,
     message_str: String,
     mission_params: MissionParam
-) -> Result<TssResult, ErrorResult> {
-    let res = sign_client(tx, db_mtx, peer_ids, message_str, mission_params.clone());
+) -> Result<TssResult, ErrorType> {
+    let res = sign_client(tx, db_mtx, message_str.clone(), mission_params.clone());
     match res.clone() {
         Ok(tss_result) => {
             if let TssResult::SignResult(s) = tss_result {
-                let result = MissionResult::new(MType::Sign, RType::Success(s.into_bytes()));
+                let result = MissionResult::new(MType::Sign, RType::Success(s.into_bytes()), message_str.as_bytes().to_vec());
                 result_sender.unbounded_send((mission_params.index, result)).expect("res_send failed");
             }
         },
-        Err(error_result) => {
-            let error_result = match error_result {
-                ErrorResult::Timeout(error_type) => {
-                    let error_type = TErrorType::new(
-                        error_type.error_type().into_bytes(),
-                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
-                    );
-                    RType::TimeFailed(error_type)
-                },
-                ErrorResult::ComError(error_type) => {
-                    let error_type = TErrorType::new(
-                        error_type.error_type().into_bytes(),
-                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
-                    );
-                    RType::ComFailed(error_type)
-                }
-            };
-            let result = MissionResult::new(MType::Sign, error_result);
+        Err(error_type) => {
+            let error_type = TErrorType::new(
+                error_type.error_type().into_bytes(),
+                get_bad_actors(mission_params.partners, error_type.bad_actors())
+            );
+            let error_result = RType::Failed(error_type);
+            let result = MissionResult::new(MType::Sign, error_result, message_str.as_bytes().to_vec());
             result_sender.unbounded_send((mission_params.index, result)).expect("err_send failed");
         }
     }
@@ -100,10 +89,9 @@ pub async fn gg20_sign_client(
 pub fn sign_client(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
     message_str: String,
     mission_params: MissionParam
-) -> Result<TssResult, ErrorResult> {
+) -> Result<TssResult, ErrorType> {
     let totaltime = SystemTime::now();
     let MissionParam {
         start_time,
@@ -111,7 +99,8 @@ pub fn sign_client(
         store,
         n,
         t,
-        local_peer_id
+        partners,
+        local_id
     } = mission_params;
 
     let message = match hex::decode(message_str.clone()) {
@@ -133,29 +122,7 @@ pub fn sign_client(
     };
     let THRESHOLD = params.threshold.parse::<u16>().unwrap();
 
-    let mut party_num_int: u16 = 0;
-
-    // tell other node the local_peer_id
-    broadcast_data(
-        tx.clone(),
-        party_num_int,
-        "sign_notify",
-        index,
-        serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        GossipType::Notify
-    );
-
-    // get party_num_int
-    loop {
-        if let Ok(peer_ids) = peer_ids.try_read() {
-            if let Some(_) = peer_ids.get(&index) {
-                if ((*peer_ids.get(&index).unwrap()).len() as u16) == params.threshold.parse::<u16>().unwrap() + 1 {
-                    party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
-                    break;
-                }
-            }
-        }
-    }
+    let party_num_int = get_party_num(&partners, &local_id).expect("invalid party_num_int");
 
     // round 0: collect signers IDs
     broadcast_data(
@@ -177,7 +144,7 @@ pub fn sign_client(
         start_time
     );
     let round0_ans_vec = if let Ok(round0_ans_vec) = poll_result { round0_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut j = 0;
@@ -230,7 +197,7 @@ pub fn sign_client(
         start_time
     );
     let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut j = 0;
@@ -327,7 +294,7 @@ pub fn sign_client(
         start_time
     );
     let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut m_b_gamma_rec_vec: Vec<MessageB> = Vec::new();
@@ -377,7 +344,7 @@ pub fn sign_client(
     // TODO: error handling
     let stage3_result = sign_stage3(&input_stage3);
     let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
-        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        return Err(stage3_result.unwrap_err());
     };
     // Send out alpha, miu to other signers.
     let mut j = 0;
@@ -415,7 +382,7 @@ pub fn sign_client(
         start_time
     );
     let round3_ans_vec = if let Ok(round3_ans_vec) = poll_result { round3_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut alpha_vec: Vec<FE> = vec![];
@@ -479,7 +446,7 @@ pub fn sign_client(
         start_time
     );
     let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut sigma_i_vec = vec![];
@@ -524,7 +491,7 @@ pub fn sign_client(
     // TODO
     let stage5_result = sign_stage5(&input_stage5);
     let res_stage5 = if let Ok(res_stage5) = stage5_result { res_stage5 } else {
-        return Err(ErrorResult::ComError(stage5_result.unwrap_err()));
+        return Err(stage5_result.unwrap_err());
     };
     broadcast_data(
         tx.clone(),
@@ -545,7 +512,7 @@ pub fn sign_client(
         start_time
     );
     let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut T_vec = vec![];
@@ -594,7 +561,7 @@ pub fn sign_client(
         start_time
     );
     let round6_ans_vec = if let Ok(round6_ans_vec) = poll_result {round6_ans_vec} else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut S_i_vec = vec![];
@@ -646,7 +613,7 @@ pub fn sign_client(
     if let Err(mut err) = res_stage7.clone() {
         match err.error_type() {
             s if s == "bad gamma_i decommit".to_string() => {
-                return Err(ErrorResult::ComError(err));
+                return Err(err);
             },
             s if s == format!("phase5 R_dash_sum check failed {:?}", Error::Phase5BadSum) => {
                 // phase 5 error
@@ -682,7 +649,7 @@ pub fn sign_client(
                     start_time
                 );
                 let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
-                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    return Err(poll_result.unwrap_err());
                 };
                 let mut local_state_vec = vec![];
                 let mut j = 0;
@@ -714,7 +681,7 @@ pub fn sign_client(
                         start_time
                     );
                     let m_b_gamma_vec = if let Ok(m_b_gamma_vec) = poll_result {m_b_gamma_vec} else {
-                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        return Err(poll_result.unwrap_err());
                     };
                     let mut m_b_gamma_vec_blame = vec![];
                     for data in m_b_gamma_vec.iter() {
@@ -734,10 +701,10 @@ pub fn sign_client(
                     &local_state_vec[..],
                 );
                 let bad_actors = global_state.phase5_blame().expect_err("No Bad Actors Found");
-                return Err(ErrorResult::ComError(bad_actors));
+                return Err(bad_actors);
             },
             s if s == "phase6".to_string() => {
-                return Err(ErrorResult::ComError(err));
+                return Err(err);
             },
             s if s == format!("phase6 S_i sum check failed {:?}", Error::Phase6Error) => {
                 let mut miu_randomness_vec = vec![];
@@ -783,7 +750,7 @@ pub fn sign_client(
                 );
 
                 let phase5_blame_ans_vec = if let Ok(phase5_blame_ans_vec) = poll_result { phase5_blame_ans_vec } else {
-                    return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                    return Err(poll_result.unwrap_err());
                 };
                 let mut local_state_vec = vec![];
                 let mut j = 0;
@@ -813,7 +780,7 @@ pub fn sign_client(
                         start_time
                     );
                     let m_b_w_vec = if let Ok(m_b_w_vec) =  poll_result { m_b_w_vec } else {
-                        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+                        return Err(poll_result.unwrap_err());
                     };
                     let mut m_b_w_vec_blame = vec![];
                     for data in m_b_w_vec.iter() {
@@ -833,11 +800,11 @@ pub fn sign_client(
                     &local_state_vec[..],
                 );
                 let err = global_state.phase6_blame(&res_stage5.R).expect_err("No Bad Actors Found");
-                return Err(ErrorResult::ComError(err));
+                return Err(err);
             },
             _ => {
                 err.set_error_type(format!("Unknown error in sign_stage7"));
-                return Err(ErrorResult::ComError(err));
+                return Err(err);
             }
         } // match end
     } // Error execution complete
@@ -862,7 +829,7 @@ pub fn sign_client(
         start_time
     );
     let round7_ans_vec = if let Ok(round7_ans_vec) = poll_result { round7_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut local_sig_vec = vec![];
@@ -899,7 +866,7 @@ pub fn sign_client(
             S_vec: S_i_vec,
         };
         let bad_actors = global_state.phase7_blame().expect_err("No Bad Actors Found");
-        return Err(ErrorResult::ComError(bad_actors));
+        return Err(bad_actors);
     }
 
     let res_stage8 = res_stage8.unwrap();

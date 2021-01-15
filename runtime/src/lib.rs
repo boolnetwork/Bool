@@ -638,8 +638,9 @@ impl pallet_identity::Trait for Runtime {
 	type WeightInfo = weights::pallet_identity::WeightInfo;
 }
 
-impl pallet_tss::Trait for Runtime {
+impl pallet_thresh::Trait for Runtime {
 	type Event = Event;
+	type Currency = Balances;
 }
 
 /// Fixed gas price of `1`.
@@ -684,7 +685,7 @@ construct_runtime!(
 		RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Module, Call, Storage},
 		Identity: pallet_identity::{Module, Call, Storage, Event<T>},
 		Scheduler: pallet_scheduler::{Module, Call, Storage, Event<T>},
-		Tss: pallet_tss::{Module, Call, Storage, Event<T>},
+		Thresh: pallet_thresh::{Module, Call, Storage, Event<T>},
 	}
 );
 

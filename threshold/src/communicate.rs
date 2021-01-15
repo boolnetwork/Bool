@@ -56,10 +56,6 @@ impl<B: BlockT, N: Network<B>> NetworkBridge<B, N> {
             gossip_validator_report_stream: report_stream,
         }
     }
-
-    pub fn service(&self) -> &N {
-        &self.service
-    }
 }
 
 impl<B: BlockT, N: Network<B>> Future for NetworkBridge<B, N> {

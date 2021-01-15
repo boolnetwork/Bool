@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use sp_utils::mpsc::{TracingUnboundedSender};
-use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
+pub use multi_party_ecdsa::protocols::multi_party_ecdsa::gg_2020::ErrorType;
+use bool_primitives::AccountId;
 
 pub type Key = String;
 
@@ -40,17 +41,17 @@ pub enum GossipMessage {
 #[derive(Clone, PartialEq, Debug)]
 pub struct MissionParam {
     pub start_time: SystemTime,
-    pub index: u64,
+    pub index: u32,
     pub store: Vec<u8>,
     pub n: u16,
     pub t: u16,
-    pub local_peer_id: PeerId
+    pub partners: Vec<AccountId>,
+    pub local_id: AccountId
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum GossipType {
-    Chat,
-    Notify,
+    Chat
 }
 
 // TODO: need more details
@@ -58,12 +59,6 @@ pub enum GossipType {
 pub enum TssResult {
     KeygenResult(String),
     SignResult(String)
-}
-
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-pub enum ErrorResult {
-    Timeout(ErrorType),
-    ComError(ErrorType)
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -77,37 +72,6 @@ pub struct Params {
     pub parties: String,
     pub threshold: String,
 }
-
-// #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-// pub struct ErrorType {
-//     error_type: String,
-//     bad_actors: Vec<usize>,
-// }
-//
-// impl ErrorType {
-//     pub fn new(error_type: String, bad_actors: Vec<usize>) -> Self {
-//         ErrorType {
-//             error_type,
-//             bad_actors
-//         }
-//     }
-//
-//     pub fn error_type(&self) -> String {
-//         self.error_type.clone()
-//     }
-//
-//     pub fn bad_actors(&self) -> Vec<usize> {
-//         self.bad_actors.clone()
-//     }
-//
-//     pub fn set_error_type(&mut self, error_type: String) {
-//         self.error_type = error_type;
-//     }
-//
-//     pub fn set_bad_actores(&mut self, bad_actors: Vec<usize>) {
-//         self.bad_actors = bad_actors;
-//     }
-// }
 
 #[allow(dead_code)]
 pub fn aes_encrypt(key: &[u8], plaintext: &[u8]) -> AEAD {
@@ -138,7 +102,7 @@ pub fn broadcast_data(
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     party_num_int: u16,
     round: &str,
-    index: u64,
+    index: u32,
     data: String,
     ty: GossipType
 ) {
@@ -149,7 +113,6 @@ pub fn broadcast_data(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        GossipType::Notify => GossipMessage::Notify(data),
         GossipType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
@@ -162,7 +125,7 @@ pub fn sendp2p_data(
     party_from: u16,
     party_to: u16,
     round: &str,
-    index: u64,
+    index: u32,
     data: String,
     ty: GossipType
 ) {
@@ -173,7 +136,6 @@ pub fn sendp2p_data(
     };
     let data = serde_json::to_string(&entry).unwrap();
     let data = match ty {
-        GossipType::Notify => GossipMessage::Notify(data),
         GossipType::Chat => GossipMessage::Chat(data),
     };
     let data = serde_json::to_string(&data).unwrap();
@@ -186,7 +148,7 @@ pub fn get_data_broadcasted(
     n: u16,
     delay: Duration,
     round: &str,
-    index: u64,
+    index: u32,
     start_time: SystemTime
 ) -> Result<Vec<String>, ErrorType> {
     let mut ans_vec: Vec<String> = Vec::new();
@@ -229,7 +191,7 @@ pub fn get_data_p2p(
     n: u16,
     delay: Duration,
     round: &str,
-    index: u64,
+    index: u32,
     start_time: SystemTime
 ) -> Result<Vec<String>, ErrorType> {
     let mut ans_vec: Vec<String> = Vec::new();
@@ -296,40 +258,23 @@ pub fn check_sig(r: &FE, s: &FE, msg: &BigInt, pk: &GE) {
     let is_correct = verify(&msg, &secp_sig, &pk);
     assert!(is_correct);
 }
-#[allow(dead_code)]
-pub fn get_party_num(index: u64, map: &HashMap<u64, Vec<Vec<u8>>>, id: &Vec<u8>) -> u16 {
-    let mut res: u16 = 1;
-    for vv in map.get(&index).unwrap().clone() {
-        if compare_id(id, &vv) {
-            res += 1;
-        }
-    }
-    res
-}
-#[allow(dead_code)]
-fn compare_id(myid: &Vec<u8>, otid: &Vec<u8>) -> bool {
-    for i in 0..(*myid).len() {
-        if (*myid)[i] < (*otid)[i] { return false; }
-        else if (*myid)[i] > (*otid)[i] { return true; }
-    }
-    false
-}
-
-pub fn vec_contains_vecu8 (vec: &Vec<Vec<u8>>, value: &Vec<u8>) -> bool {
-    for num in vec.clone() {
-        if vecu8_equal(&num, value) { return true; }
-    }
-    false
-}
-
-fn vecu8_equal(v1: &Vec<u8>, v2: &Vec<u8>) -> bool {
-    for i in 0..(*v1).len() {
-        if v1[i] != v2[i] { return false; }
-    }
-    true
-}
 
 fn time_check_out(start_time: SystemTime, time_limit: Duration) -> bool {
     if start_time.elapsed().unwrap() >= time_limit { return true; }
     false
+}
+
+pub fn get_party_num(partners: &Vec<AccountId>, local_id: &AccountId) -> Option<u16> {
+    for i in 0..partners.len() {
+        if partners[i] == *local_id { return Some((i+1) as u16); }
+    }
+    None
+}
+
+pub fn get_bad_actors(partners: Vec<AccountId>, bad_actors: Vec<usize>) -> Vec<AccountId> {
+    let mut res = Vec::new();
+    for num in bad_actors {
+        res.push(partners[num].clone());
+    }
+    res
 }

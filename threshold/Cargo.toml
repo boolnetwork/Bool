@@ -32,10 +32,10 @@ sp-block-builder = { version = "2.0.0" }
 sc-network = { version = "0.8.0" }
 sc-network-gossip = { version = "0.8.0" }
 sc-block-builder = { version = "0.8.0" }
-pallet-transaction-payment = { version = "2.0.0", default-features = false}
+pallet-transaction-payment = { version = "2.0.0", default-features = false }
 bool-runtime = { version = "0.6.0", path = "../runtime" }
 bool-primitives = { version = "0.6.0", path = "../primitives" }
-pallet-tss = { version = "0.1.0", default-features = false, path = "../pallet-tss"}
+pallet-thresh = { default-features = false, path = "../pallets/thresh" }
 frame-system = { version = "2.0.0" }
 multi-party-ecdsa = { version = "0.4.3", git = "https://github.com/boolnetwork/multi-party-ecdsa-p2p.git" }
 paillier = { git = "https://github.com/KZen-networks/rust-paillier", tag = "v0.3.4" }

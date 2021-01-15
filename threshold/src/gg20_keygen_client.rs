@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::sync::{RwLock, Arc};
 use parking_lot::{Mutex};
 use std::time::SystemTime;
-use pallet_tss::{RType, MType, MissionResult, ErrorType as TErrorType};
-
+use pallet_thresh::ErrorType as TErrorType;
+use crate::listening::{RType, MType, MissionResult};
 use crate::common::{aes_decrypt, aes_encrypt, Params, AEAD, Key, AES_KEY_BYTES_LEN, GossipType,
             get_data_broadcasted, get_data_p2p, broadcast_data, sendp2p_data, get_party_num,
-            TssResult, MissionParam, ErrorResult};
+            TssResult, MissionParam, ErrorType, get_bad_actors};
 
 impl From<Params> for Parameters {
     fn from(item: Params) -> Self {
@@ -38,36 +38,24 @@ impl From<Params> for Parameters {
 pub async fn gg20_keygen_client (
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
-    result_sender: Arc<TracingUnboundedSender<(u64, MissionResult)>>,
+    result_sender: Arc<TracingUnboundedSender<(u32, MissionResult)>>,
     mission_params: MissionParam,
-) -> Result<TssResult, ErrorResult> {
-    let res = keygen_client(tx, db_mtx, peer_ids, mission_params.clone());
+) -> Result<TssResult, ErrorType> {
+    let res = keygen_client(tx, db_mtx, mission_params.clone());
     match res.clone() {
         Ok(tss_result) => {
             if let TssResult::KeygenResult(s) = tss_result {
-                let result = MissionResult::new(MType::Keygen, RType::Success(s.into_bytes()));
+                let result = MissionResult::new(MType::Keygen, RType::Success(s.into_bytes()), Vec::new());
                 result_sender.unbounded_send((mission_params.index, result)).expect("res_send failed");
             }
         },
-        Err(error_result) => {
-            let error_result = match error_result {
-                ErrorResult::Timeout(error_type) => {
-                    let error_type = TErrorType::new(
-                        error_type.error_type().into_bytes(),
-                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
-                    );
-                    RType::TimeFailed(error_type)
-                },
-                ErrorResult::ComError(error_type) => {
-                    let error_type = TErrorType::new(
-                        error_type.error_type().into_bytes(),
-                        error_type.bad_actors().iter().map(|&x| x as u16).collect()
-                    );
-                    RType::ComFailed(error_type)
-                }
-            };
-            let result = MissionResult::new(MType::Keygen, error_result);
+        Err(error_type) => {
+            let error_type = TErrorType::new(
+                error_type.error_type().into_bytes(),
+                get_bad_actors(mission_params.partners, error_type.bad_actors())
+            );
+            let error_result = RType::Failed(error_type);
+            let result = MissionResult::new(MType::Keygen, error_result, Vec::new());
             result_sender.unbounded_send((mission_params.index, result)).expect("err_send failed");
         }
     }
@@ -77,9 +65,8 @@ pub async fn gg20_keygen_client (
 pub fn keygen_client (
     tx: Arc<Mutex<TracingUnboundedSender<String>>>,
     db_mtx: Arc<RwLock<HashMap<Key, String>>>,
-    peer_ids: Arc<RwLock<HashMap<u64, Vec<Vec<u8>>>>>,
     mission_params: MissionParam,
-) -> Result<TssResult, ErrorResult> {
+) -> Result<TssResult, ErrorType> {
     let totaltime = SystemTime::now();
     let MissionParam {
         start_time,
@@ -87,39 +74,18 @@ pub fn keygen_client (
         store,
         n,
         t,
-        local_peer_id
+        partners,
+        local_id
     } = mission_params;
 
     let params: Parameters = Parameters {
         share_count: n,
         threshold: t
     };
-    let params_lis = params.clone();
-
-    let mut party_num_int: u16 = 0;
 
     let delay = time::Duration::from_millis(25);
 
-    // tell other node the local_peer_id
-    broadcast_data(
-        tx.clone(),
-        party_num_int,
-        "keygen_notify",
-        index,
-        serde_json::to_string(&local_peer_id.clone().as_bytes()).unwrap(),
-        GossipType::Notify
-    );
-    // get party_num_int
-    loop{
-        if let Ok(peer_ids) = peer_ids.try_read() {
-            if let Some(_) = peer_ids.get(&index) {
-                if ((*peer_ids.get(&index).unwrap()).len() as u16) == params_lis.share_count {
-                    party_num_int = get_party_num(index, &peer_ids, &local_peer_id.as_bytes().to_vec());
-                    break;
-                }
-            }
-        }
-    }
+    let party_num_int = get_party_num(&partners, &local_id).expect("invalid party_num_int");
 
     let input_stage1 = KeyGenStage1Input {
         index: (party_num_int - 1) as usize,
@@ -148,7 +114,7 @@ pub fn keygen_client (
         start_time
     );
     let round1_ans_vec = if let Ok(round1_ans_vec) = poll_result { round1_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     // public information: the vector contains KGC_i
@@ -180,7 +146,7 @@ pub fn keygen_client (
         start_time
     );
     let round2_ans_vec = if let Ok(round2_ans_vec) = poll_result { round2_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut decom1_vec = round2_ans_vec
@@ -204,7 +170,7 @@ pub fn keygen_client (
     // TODO: key generation blame
     let res_stage2 = keygen_stage2(&input_stage2);
     let res_stage2 = if let Ok(res) = res_stage2 { res } else {
-        return Err(ErrorResult::ComError(res_stage2.unwrap_err()));
+        return Err(res_stage2.unwrap_err());
     };
 
     // point_vec: to memory y_i of each party
@@ -266,7 +232,7 @@ pub fn keygen_client (
         start_time
     );
     let round3_ans_vec = if let Ok(round3_ans_vec) =  poll_result { round3_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     // P_i using corresponding aes encryption key between P_i and P_j
@@ -308,7 +274,7 @@ pub fn keygen_client (
         start_time
     );
     let round4_ans_vec = if let Ok(round4_ans_vec) = poll_result { round4_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut j = 0;
@@ -338,7 +304,7 @@ pub fn keygen_client (
 
     let stage3_result = keygen_stage3(&input_stage3);
     let res_stage3 = if let Ok(res_stage3) = stage3_result { res_stage3 } else {
-        return Err(ErrorResult::ComError(stage3_result.unwrap_err()));
+        return Err(stage3_result.unwrap_err());
     };
 
     // round 5: send dlog proof
@@ -361,7 +327,7 @@ pub fn keygen_client (
         start_time
     );
     let round5_ans_vec = if let Ok(round5_ans_vec) = poll_result { round5_ans_vec } else {
-        return Err(ErrorResult::Timeout(poll_result.unwrap_err()));
+        return Err(poll_result.unwrap_err());
     };
 
     let mut j = 0;
@@ -386,7 +352,7 @@ pub fn keygen_client (
 
     let stage4_result = keygen_stage4(&input_stage4);
     if let Err(e) = stage4_result {
-        return Err(ErrorResult::ComError(e));
+        return Err(e);
     }
 
     //save key to file:

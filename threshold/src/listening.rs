@@ -13,8 +13,7 @@ pub use sp_core::sr25519;
 use sc_client_api::{BlockchainEvents};
 
 use futures::prelude::*;
-use futures::executor::block_on;
-use log::{debug, info};
+use log::info;
 use sp_blockchain::{HeaderBackend};
 use parity_scale_codec::{Encode, Decode};
 use sp_transaction_pool::{TransactionPool, TransactionFor};
@@ -22,7 +21,7 @@ use bool_runtime::{
     UncheckedExtrinsic , apis::VendorApi, Call, SignedPayload
 };
 // use frame_system::{Call as SystemCall};
-use pallet_tss::{Call as TssCall};
+use pallet_thresh::{Call as ThreshCall};
 pub use bool_primitives::{AccountId, Signature, Balance, Index};
 pub use sp_core::storage::{StorageKey, StorageData};
 pub use sc_client_api::notifications::{StorageEventStream};
@@ -35,29 +34,52 @@ use sc_block_builder::{BlockBuilderProvider};
 use bool_runtime::{Event, Runtime } ;
 use bool_primitives::Hash;
 use frame_system::EventRecord;
-use pallet_tss::{RawEvent, MissionResult, RType};
+use pallet_thresh::{RawEvent, ThreshMode, ThreshPublic, SignResult, ErrorType};
 use sp_utils::mpsc::{TracingUnboundedSender, TracingUnboundedReceiver};
 use crate::communicate::Error;
 
-#[derive(Debug, Clone)]
-pub enum WorkerCommand {
-    Keygen(u64, Vec<u8>, u16, u16),
-    Sign(u64, Vec<u8>, u16, u16, Vec<u8>)
+#[derive(Clone, PartialEq, Debug, Encode, Decode)]
+pub enum RType {
+    Success(Vec<u8>),
+    Failed(ErrorType<AccountId>),
 }
 
-// pub enum TssRole{
-//     Manager,
-//     Party,
-// }
+#[derive(Clone, PartialEq, Debug, Encode, Decode)]
+pub enum MType {
+    Keygen,
+    Sign
+}
+
+#[derive(Clone, PartialEq, Debug, Encode, Decode)]
+pub struct MissionResult {
+    // who: AccountId,
+    pub mtype: MType,
+    pub rtype: RType,
+    pub message: Vec<u8>
+}
+
+impl MissionResult {
+    pub fn new(mtype: MType, rtype: RType, message: Vec<u8>) -> Self {
+        MissionResult {
+            mtype, rtype, message
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkerCommand {
+    Keygen(u32, Vec<u8>, u16, u16, Vec<AccountId>, AccountId),
+    Sign(u32, Vec<u8>, u16, u16, Vec<u8>, Vec<AccountId>, AccountId)
+}
 
 #[derive(Debug, Clone)]
 pub struct TxMessage {
-    pub index: u64,
+    pub index: u32,
     pub result: MissionResult
 }
 
 impl TxMessage{
-    pub fn new(index: u64, result: MissionResult) -> Self{
+    pub fn new(index: u32, result: MissionResult) -> Self{
         TxMessage{
             index,
             result
@@ -109,6 +131,8 @@ pub trait SuperviseClient<B>
     // fn is_tss_party(&self) -> bool;
     //
     fn submit(&self, message: TxMessage);
+
+    fn get_account_id(&self) -> AccountId;
 }
 
 #[derive( Clone)]
@@ -190,16 +214,6 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
             .unwrap()
     }
 
-    // fn is_tss_party(&self) -> bool {
-    //     let info = self.client.info();
-    //     let at: BlockId<Block> = BlockId::Hash(info.best_hash);
-    //
-    //     self.client
-    //         .runtime_api()
-    //         .is_tss_party(&at, &self.ed_key.public().0.into())
-    //         .unwrap()
-    // }
-
     fn submit(&self, relay_message: TxMessage) {
         let local_id: AccountId = self.ed_key.public().0.into();
         let info = self.client.info();
@@ -207,14 +221,26 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
         {
             let nonce = self.get_nonce();
 
-            let function = match relay_message.result.rtype {
-                RType::Success(_) => {
-                    let vec = relay_message.result.encode();
-                    Call::Tss(TssCall::success_result(relay_message.index, vec))
+            let function = match relay_message.result.mtype.clone() {
+                MType::Keygen => {
+                    match relay_message.result.rtype.clone() {
+                        RType::Success(s) => {
+                            Call::Thresh(ThreshCall::group(relay_message.index, ThreshPublic::new(s), Vec::new()))
+                        },
+                        RType::Failed(e) => {
+                            Call::Thresh(ThreshCall::group_error(relay_message.index, e, Vec::new()))
+                        }
+                    }
                 },
-                _ => {
-                    let vec = relay_message.result.encode();
-                    Call::Tss(TssCall::error_result(relay_message.index, vec))
+                MType::Sign => {
+                    match relay_message.result.rtype.clone() {
+                        RType::Success(s) => {
+                            Call::Thresh(ThreshCall::sign(relay_message.index, relay_message.result.message, SignResult::new(s), Vec::new()))
+                        },
+                        RType::Failed(e) => {
+                            Call::Thresh(ThreshCall::sign_error(relay_message.index, relay_message.result.message, e, Vec::new()))
+                        }
+                    }
                 }
             };
 
@@ -258,6 +284,10 @@ impl<A,Block,B,C> SuperviseClient<Block> for TxSender<A,Block,B,C>
             info!("SuperviseClient submit transaction {:?}", result);
         }
     }
+
+    fn get_account_id(&self) -> AccountId {
+        self.ed_key.public().0.into()
+    }
 }
 
 #[derive(Debug)]
@@ -267,9 +297,8 @@ pub struct TssSender<V, B>
 {
     pub spv: V,
     pub command_tx: TracingUnboundedSender<WorkerCommand>,
-    pub result_rx: TracingUnboundedReceiver<(u64, MissionResult)>,
+    pub result_rx: TracingUnboundedReceiver<(u32, MissionResult)>,
     pub a: std::marker::PhantomData<B>,
-    pub mission_counter: Arc<Mutex<u64>>,
     pub storage_stream: StorageEventStream<B::Hash>
 }
 
@@ -278,7 +307,7 @@ impl <V, B>TssSender<V,B>
             B: BlockT,
 {
     pub fn new(spv: V, command_tx: TracingUnboundedSender<WorkerCommand>,
-               result_rx: TracingUnboundedReceiver<(u64, MissionResult)>,
+               result_rx: TracingUnboundedReceiver<(u32, MissionResult)>,
                storage_stream: StorageEventStream<B::Hash>
     ) -> Self {
         TssSender {
@@ -286,27 +315,19 @@ impl <V, B>TssSender<V,B>
             command_tx,
             result_rx,
             a: PhantomData,
-            mission_counter: Arc::new(Mutex::new(0)),
             storage_stream
         }
     }
 
-    fn set_counter(&mut self, index: u64) {
-        *self.mission_counter.lock() = index;
+    fn key_gen(&self, index: u32, store: Vec<u8>, mode: ThreshMode, partners: Vec<AccountId>, local_id: AccountId){
+        self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, mode.n, mode.t, partners, local_id))
+            .expect("send command failed");
     }
 
-    fn key_gen(&self, index: u64, store: Vec<u8>, n: u16, t: u16){
-        self.command_tx.unbounded_send(WorkerCommand::Keygen(index, store, n, t)).expect("send command failed");
+    fn key_sign(&self, index: u32, store: Vec<u8>, mode: ThreshMode, message_str: Vec<u8>, partners: Vec<AccountId>, local_id: AccountId) {
+        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, mode.n, mode.t, message_str, partners, local_id))
+            .expect("send command failed");
     }
-
-    fn key_sign(&self, index: u64, store: Vec<u8>, n: u16, t: u16, message_str: Vec<u8>) {
-        self.command_tx.unbounded_send(WorkerCommand::Sign(index, store, n, t, message_str)).expect("send command failed");
-    }
-
-    // fn get_stream(&self, events_key:StorageKey) -> StorageEventStream<B::Hash> {
-    //     self.spv.get_notification_stream(Some(&[events_key]), None)
-    // }
-
 }
 
 impl<V, B> Future for TssSender<V,B>
@@ -338,21 +359,23 @@ impl<V, B> Future for TssSender<V,B>
                 loop {
                     match events.next() {
                         Some(event) => {
-                            if let Event::pallet_tss(e) = event {
+                            if let Event::pallet_thresh(e) = event {
                                 match e {
-                                    RawEvent::GenKey(index, store, n, t, _time) => {
-                                        if *self.mission_counter.lock() != index {
-                                            self.key_gen(index, (*store).to_vec(), n, t);
-                                            self.set_counter(index);
+                                    RawEvent::TryGroup(index, mode, partners) => {
+                                        let local_id: AccountId = self.spv.get_account_id();
+                                        if contains_id(partners.clone(), local_id.clone()) {
+                                            let store = format!("key{}.store", index).as_bytes().to_vec();
+                                            self.key_gen(index, store, mode, partners, local_id);
                                         }
                                     },
-                                    RawEvent::Sign(index, store, n, t, message_str, _time) => {
-                                        if *self.mission_counter.lock() != index {
-                                            self.key_sign(index, (*store).to_vec(), n, t, (*message_str).to_vec());
-                                            self.set_counter(index);
+                                    RawEvent::TrySign(index, mode, message_str, partners) => {
+                                        let local_id: AccountId = self.spv.get_account_id();
+                                        if contains_id(partners.clone(), local_id.clone()) {
+                                            let store = format!("key{}.store", index).as_bytes().to_vec();
+                                            self.key_sign(index, store, mode, (*message_str).to_vec(), partners, local_id);
                                         }
                                     },
-                                    _ => {println!("********** submit success ***********");}
+                                    _ => ()
                                 }
                             }
                         },
@@ -383,3 +406,10 @@ impl<V, B> Unpin for TssSender<V, B>
     where   V: SuperviseClient<B> + Send + Sync + 'static,
             B: BlockT,
 {}
+
+pub fn contains_id(vec: Vec<AccountId>, local_id: AccountId) -> bool {
+    for id in vec.clone() {
+        if local_id == id { return true; }
+    }
+    false
+}

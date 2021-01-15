@@ -6,7 +6,6 @@ members = [
     "cli",
     "pallets/thresh",
     "threshold",
-    "pallet-tss",
 ]
 
 [profile.release]

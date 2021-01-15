@@ -1,13 +1,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use sp_std::prelude::*;
 use codec::{Decode, Encode};
 use dispatch::DispatchResult;
 use frame_support::{
     decl_error, decl_event, decl_module, decl_storage, dispatch, ensure,
-    traits::{Currency, Get, LockIdentifier, LockableCurrency, WithdrawReasons},
+    traits::{Currency, LockIdentifier, LockableCurrency, WithdrawReasons},
 };
 use frame_system::{ensure_root, ensure_signed};
-use sp_runtime::{traits::CheckedSub, RuntimeDebug, traits::{Zero}};
+use sp_runtime::{traits::CheckedSub, RuntimeDebug};
 
 #[cfg(test)]
 mod mock;
@@ -22,10 +23,25 @@ type GroupIndex = u32;
 #[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
 pub struct ThreshPublic(Vec<u8>);
 
+impl ThreshPublic {
+    pub fn new(vec: Vec<u8>) -> Self {
+        ThreshPublic(vec)
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
+pub struct SignResult(Vec<u8>);
+
+impl SignResult {
+    pub fn new(vec: Vec<u8>) -> Self {
+        SignResult(vec)
+    }
+}
+
 #[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
 pub struct ThreshMode {
-    pub t: u32,
-    pub n: u32,
+    pub t: u16,
+    pub n: u16,
 }
 
 /// threshold partner state
@@ -102,6 +118,23 @@ where
     }
 }
 
+#[derive(Clone, Eq, PartialEq, Encode, Decode, Default, RuntimeDebug)]
+pub struct ErrorType<AccountId> {
+    // string vec
+    pub error_type: Vec<u8>,
+    // numbers of bad actors
+    pub bad_actors: Vec<AccountId>,
+}
+
+impl<AccountId: PartialEq> ErrorType<AccountId> {
+    pub fn new(error_type: Vec<u8>, bad_actors: Vec<AccountId>) -> Self {
+        ErrorType {
+            error_type,
+            bad_actors
+        }
+    }
+}
+
 pub type BalanceOf<T> =
     <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
 
@@ -126,7 +159,7 @@ decl_storage! {
     }
 }
 
-decl_event!(
+decl_event! {
     pub enum Event<T>
     where
         AccountId = <T as frame_system::Trait>::AccountId,
@@ -136,13 +169,14 @@ decl_event!(
         Withdrawn(AccountId, Balance),
         TryGroup(GroupIndex, ThreshMode, Vec<AccountId>),
         Grouped(GroupIndex, ThreshPublic),
+        TrySign(GroupIndex, ThreshMode, Vec<u8>, Vec<AccountId>),
         TryExit(AccountId, AccountId),
         Exchanged(GroupIndex, AccountId, AccountId),
         Reward(AccountId, Balance),
         Slash(AccountId, Balance),
         Report(AccountId),
     }
-);
+}
 
 decl_error! {
     pub enum Error for Module<T: Trait> {
@@ -231,8 +265,8 @@ decl_module! {
         pub fn try_group(origin, mode: ThreshMode) -> DispatchResult {
             let _actor = ensure_root(origin)?;
 
-            ensure!(mode.n < <ActivePartners<T>>::get().len() as u32, Error::<T>::InsufficientPartner);
-            let partners = Self::select_partners(mode.n);
+            ensure!(u32::from(mode.n) < <ActivePartners<T>>::get().len() as u32, Error::<T>::InsufficientPartner);
+            let partners = Self::select_partners(mode.n.into());
 
             // update count
             let c = GroupCount::get();
@@ -270,6 +304,24 @@ decl_module! {
             <Groups<T>>::insert(gi, group);
             Self::deposit_event(RawEvent::Grouped(gi, public));
 
+            Ok(())
+        }
+
+        #[weight = 0]
+        pub fn group_error(origin, gi: GroupIndex, error: ErrorType<T::AccountId>, proof: Vec<u8>) -> DispatchResult {
+            let _actor = ensure_signed(origin)?;
+            Ok(())
+        }
+
+        #[weight = 0]
+        pub fn sign(origin, gi: GroupIndex, msg: Vec<u8>, public: SignResult, _proof: Vec<u8>) -> DispatchResult {
+            let _actor = ensure_signed(origin)?;
+            Ok(())
+        }
+
+        #[weight = 0]
+        pub fn sign_error(origin, gi: GroupIndex, msg: Vec<u8>, error: ErrorType<T::AccountId>, _proof: Vec<u8>) -> DispatchResult {
+            let _actor = ensure_signed(origin)?;
             Ok(())
         }
 
@@ -349,7 +401,7 @@ impl<T: Trait> Module<T> {
         Self::active_partners().into_iter().take(n as usize).collect()
     }
 
-    fn select_partner_without_group(index: GroupIndex) -> T::AccountId {
+    fn select_partner_without_group(_index: GroupIndex) -> T::AccountId {
         T::AccountId::default()
     }
 }

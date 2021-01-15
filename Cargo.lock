@@ -742,10 +742,10 @@ dependencies = [
  "pallet-staking",
  "pallet-staking-reward-curve",
  "pallet-sudo",
+ "pallet-thresh",
  "pallet-timestamp",
  "pallet-transaction-payment",
  "pallet-transaction-payment-rpc-runtime-api",
- "pallet-tss",
  "pallet-utility",
  "parity-scale-codec",
  "rustc-hex",
@@ -4464,6 +4464,7 @@ dependencies = [
  "sp-core",
  "sp-io",
  "sp-runtime",
+ "sp-std",
 ]
 
 [[package]]
@@ -4531,22 +4532,6 @@ dependencies = [
  "parity-scale-codec",
  "serde",
  "sp-api",
- "sp-runtime",
- "sp-std",
-]
-
-[[package]]
-name = "pallet-tss"
-version = "0.1.0"
-dependencies = [
- "frame-support",
- "frame-system",
- "lazy_static",
- "pallet-timestamp",
- "parity-scale-codec",
- "serde",
- "serde_json",
- "sp-core",
  "sp-runtime",
  "sp-std",
 ]
@@ -8031,8 +8016,8 @@ dependencies = [
  "log",
  "multi-party-ecdsa",
  "paillier",
+ "pallet-thresh",
  "pallet-transaction-payment",
- "pallet-tss",
  "parity-scale-codec",
  "parking_lot 0.10.2",
  "reqwest",
